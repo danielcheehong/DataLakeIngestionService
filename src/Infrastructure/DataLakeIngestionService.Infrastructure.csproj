@@ -35,6 +35,7 @@
 
   <ItemGroup>
     <Folder Include="Transformation\Common\" />
+    <Folder Include="Vault\" />
   </ItemGroup>
 
 </Project>
