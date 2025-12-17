@@ -1,0 +1,51 @@
+{
+  "datasetId": "sales-daily-sqlserver",
+  "name": "Daily Sales Transactions",
+  "description": "Extract daily sales data from SQL Server",
+  "enabled": true,
+  "cronExpression": "0 0 2 * * ?",
+
+  "source": {
+    "type": "SqlServer",
+    "connectionStringKey": "SalesSqlServer",
+    "extractionType": "StoredProcedure",
+    "procedureName": "dbo.sp_GetDailySales",
+    "parameters": {
+      "StartDate": "2024-01-01",
+      "EndDate": "2024-12-31"
+    },
+    "commandTimeout": 300
+  },
+
+  "transformations": [],
+
+  "parquet": {
+    "fileNamePattern": "sales_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "compressionCodec": "Snappy",
+    "rowGroupSize": 10000,
+    "enableStatistics": true
+  },
+
+  "upload": {
+    "provider": "FileSystem",
+    "fileSystemConfig": {
+      "basePath": "",
+      "relativePath": "sales/{year}/{month}/{day}/"
+    },
+    "overwriteExisting": false,
+    "enableRetry": true,
+    "maxRetries": 3
+  },
+
+  "notifications": {
+    "onSuccess": false,
+    "onFailure": true,
+    "channels": ["email"]
+  },
+
+  "metadata": {
+    "owner": "Sales Team",
+    "contact": "sales-team@company.com",
+    "tags": ["sales", "daily", "transactions"]
+  }
+}
