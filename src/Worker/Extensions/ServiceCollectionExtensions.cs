@@ -29,9 +29,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ParquetGenerationHandler>();
         services.AddScoped<UploadHandler>();
 
-        // Example of how data pipeline could be registered.
-        // We will register a data pipeline for each extracted dataset later in the JobSchedulingService.
-        /*
+        // Register Data Pipeline for DataIngestionJob.
+        // Note: DataPipeline is registered as Scoped to ensure a new instance per job execution.
+        // Transformation steps can maintain state if needed in future enhancements, and be configured per dataset.
         services.AddScoped<DataPipeline>(sp =>
         {
             var logger = sp.GetRequiredService<ILogger<DataPipeline>>();
@@ -42,7 +42,7 @@ public static class ServiceCollectionExtensions
 
             return new DataPipeline(logger, extractionHandler, transformationHandler, parquetHandler, uploadHandler);
         });
-        */
+        
 
         // Register Infrastructure Services
         services.AddScoped<IDataSourceFactory, DataSourceFactory>();
@@ -77,8 +77,6 @@ public static class ServiceCollectionExtensions
         // Register Quartz.NET
         services.AddQuartz(q =>
         {
-            q.UseMicrosoftDependencyInjectionJobFactory();
-
             // Use in-memory store for now
             q.UseInMemoryStore();
 

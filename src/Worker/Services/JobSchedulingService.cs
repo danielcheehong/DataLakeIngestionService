@@ -46,6 +46,13 @@ public class JobSchedulingService : IHostedService
         {
             var jobKey = new JobKey(datasetId, "DataIngestion");
 
+            // Check if job already exists
+            if (await _scheduler!.CheckExists(jobKey, cancellationToken))
+            {
+                _logger.LogInformation("Job for dataset {DatasetId} already exists.  Deleting and rescheduling.",datasetId);
+                await _scheduler.DeleteJob(jobKey, cancellationToken);
+            }
+
             var job = JobBuilder.Create<DataIngestionJob>()
                 .WithIdentity(jobKey)
                 .UsingJobData("DatasetId", datasetId)

@@ -1,0 +1,52 @@
+{
+  "datasetId": "hr-employees-oracle",
+  "name": "HR Employee Data",
+  "description": "Extract employee data from Oracle HR database",
+  "enabled": true,
+  "cronExpression": "0 0 3 * * ?",
+
+  "source": {
+    "type": "Oracle",
+    "connectionStringKey": "HROracleDB",
+    "extractionType": "Package",
+    "packageName": "HR_PKG",
+    "procedureName": "GET_EMPLOYEE_DATA",
+    "parameters": {
+      "p_department_id": "0",
+      "p_active_only": "Y"
+    },
+    "commandTimeout": 600
+  },
+
+  "transformations": [],
+
+  "parquet": {
+    "fileNamePattern": "hr_employees_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "compressionCodec": "Snappy",
+    "rowGroupSize": 10000,
+    "enableStatistics": true
+  },
+
+  "upload": {
+    "provider": "FileSystem",
+    "fileSystemConfig": {
+      "basePath": "",
+      "relativePath": "hr/employees/{year}/{month}/{day}/"
+    },
+    "overwriteExisting": false,
+    "enableRetry": true,
+    "maxRetries": 3
+  },
+
+  "notifications": {
+    "onSuccess": false,
+    "onFailure": true,
+    "channels": ["email"]
+  },
+
+  "metadata": {
+    "owner": "HR Team",
+    "contact": "hr-team@company.com",
+    "tags": ["hr", "employees", "oracle"]
+  }
+}
