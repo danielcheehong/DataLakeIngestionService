@@ -30,7 +30,7 @@
     "provider": "FileSystem",
     "fileSystemConfig": {
       "basePath": "",
-      "relativePath": "Trades/{year}/{month}/{day}/"
+      "relativePath": "Trades/Transcations/"
     },
     "overwriteExisting": false,
     "enableRetry": true,

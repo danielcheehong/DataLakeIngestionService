@@ -32,7 +32,8 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
         ┌────────────────────▼────────────────────┐
         │    DataIngestionJob (IJob)              │
         │  - Loads dataset configuration          │
-        │  - Gets connection string               │
+        │  - Resolves connection string           │
+        │  - Generates file name from pattern     │
         │  - Builds pipeline metadata             │
         │  - Executes DataPipeline                │
         └────────────────────┬────────────────────┘
@@ -59,6 +60,12 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
         │    ├─ FileSystemUploadProvider          │
         │    └─ AzureBlobStorageProvider          │
         └─────────────────────────────────────────┘
+        
+        Supporting Services:
+        ├─ ConnectionStringBuilder
+        ├─ DatasetConfigurationService
+        ├─ JobSchedulingService
+        └─ Vault Services (EvaVaultService, SecuritasVaultService)
 ```
 
 ### Pipeline Context Flow
@@ -118,14 +125,19 @@ Edit `src/Worker/appsettings.json`:
 
 ```json
 {
+  "Datasets": {
+    "ConfigurationPath": "./Datasets",
+    "EnableHotReload": true,
+    "ReloadIntervalSeconds": 300
+  },
+
   "ConnectionStrings": {
-    "SalesSqlServer": "Server=localhost;Database=Sales;Integrated Security=true;TrustServerCertificate=true;",
-    "HROracleDB": "Data Source=localhost:1521/ORCL;User Id=hr_service;Password=YourPassword;",
-    "InventoryDB": "Server=localhost;Database=Warehouse;Integrated Security=true;TrustServerCertificate=true;"
+    "TradesSqlServer": "Server=localhost;Database=Trades;User Id=sa;Password=TestPwd123!;TrustServerCertificate=true;Encrypt=false;",
+    "HROracleDB": "Data Source=localhost:1521/XEPDB1;User Id=hr_service;Password=ServicePassword123!;"
   },
   
   "FileSystemProvider": {
-    "BasePath": "C:\\DataLake\\Output",  // Windows
+    "BasePath": "C:\\temp\\DataLake",  // Windows
     // "BasePath": "/var/datalake/output",  // Linux
     "MaxRetries": 3
   },
@@ -143,20 +155,20 @@ Create a JSON file in `src/Worker/Datasets/` (e.g., `dataset-sales-sqlserver.jso
 
 ```json
 {
-  "datasetId": "sales-daily-sqlserver",
-  "name": "Daily Sales Transactions",
-  "description": "Extract daily sales data from SQL Server",
+  "datasetId": "Trades-daily-sqlserver",
+  "name": "Daily Trades Transactions",
+  "description": "Extract daily Trades data from SQL Server",
   "enabled": true,
-  "cronExpression": "0 0 2 * * ?",  // Every day at 2 AM
+  "cronExpression": "0 */2 * * * ?",  // Every 2 minutes
 
   "source": {
     "type": "SqlServer",
-    "connectionStringKey": "SalesSqlServer",
+    "connectionStringKey": "TradesSqlServer",
     "extractionType": "StoredProcedure",
-    "procedureName": "dbo.sp_GetDailySales",
+    "procedureName": "dbo.sp_GetDailyTrades",
     "parameters": {
       "StartDate": "2024-01-01",
-      "EndDate": "2024-12-31"
+      "EndDate": "2025-12-31"
     },
     "commandTimeout": 300
   },
@@ -164,7 +176,7 @@ Create a JSON file in `src/Worker/Datasets/` (e.g., `dataset-sales-sqlserver.jso
   "transformations": [],
 
   "parquet": {
-    "fileNamePattern": "sales_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "fileNamePattern": "Trades_{date:yyyyMMdd}_{time:HHmmss}.parquet",
     "compressionCodec": "Snappy",
     "rowGroupSize": 10000,
     "enableStatistics": true
@@ -174,11 +186,23 @@ Create a JSON file in `src/Worker/Datasets/` (e.g., `dataset-sales-sqlserver.jso
     "provider": "FileSystem",
     "fileSystemConfig": {
       "basePath": "",
-      "relativePath": "sales/{year}/{month}/{day}/"
+      "relativePath": "Trades/Transcations/"
     },
     "overwriteExisting": false,
     "enableRetry": true,
     "maxRetries": 3
+  },
+
+  "notifications": {
+    "onSuccess": false,
+    "onFailure": true,
+    "channels": ["email"]
+  },
+
+  "metadata": {
+    "owner": "Trades Team",
+    "contact": "Trades-team@company.com",
+    "tags": ["Trades", "daily", "transactions"]
   }
 }
 ```
@@ -202,8 +226,9 @@ dotnet DataLakeIngestionService.Worker.dll --console
 [INF] Starting Data Lake Ingestion Service
 [INF] Configured for Windows Service hosting
 [INF] Service configured successfully. Starting host...
-[INF] Loaded 1 dataset configurations
-[INF] Scheduled job for dataset: sales-daily-sqlserver with cron: 0 0 2 * * ?
+[INF] Loaded 2 dataset configurations
+[INF] Scheduled job for dataset: Trades-daily-sqlserver with cron: 0 */2 * * * ?
+[INF] Scheduled job for dataset: hr-employees-oracle with cron: 0 */1 * * * ?
 ```
 
 ## Installation
@@ -226,6 +251,22 @@ sudo ./install-daemon.sh
 ```
 
 ## Configuration Details
+
+### Datasets Configuration
+
+The service supports hot-reloading of dataset configurations. Configure in `appsettings.json`:
+
+```json
+{
+  "Datasets": {
+    "ConfigurationPath": "./Datasets",     // Path to dataset JSON files
+    "EnableHotReload": true,                // Enable hot reload
+    "ReloadIntervalSeconds": 300            // Check for changes every 5 minutes
+  }
+}
+```
+
+When `EnableHotReload` is true, the service will automatically detect changes to dataset configuration files and reschedule jobs without requiring a restart.
 
 ### Dataset Configuration Schema
 
@@ -421,11 +462,17 @@ DataLakeIngestionService/
 │   │   │   └── TransformationEngine.cs         # Transformation steps
 │   │   ├── Parquet/
 │   │   │   └── ParquetWriterService.cs         # Parquet.Net writer
-│   │   └── Upload/
-│   │       ├── Providers/
-│   │       │   ├── FileSystemUploadProvider.cs # Local/network upload
-│   │       │   └── AzureBlobStorageProvider.cs # Azure Blob upload
-│   │       └── UploadProviderFactory.cs
+│   │   ├── Services/
+│   │   │   ├── ConnectionStringBuilder.cs      # Connection string utilities
+│   │   │   └── DatasetConfigurationService.cs  # Config management
+│   │   ├── Upload/
+│   │   │   ├── Providers/
+│   │   │   │   ├── FileSystemUploadProvider.cs # Local/network upload
+│   │   │   │   └── AzureBlobStorageProvider.cs # Azure Blob upload
+│   │   │   └── UploadProviderFactory.cs
+│   │   └── Vault/
+│   │       ├── EvaVaultService.cs              # EVA vault integration
+│   │       └── SecuritasVaultService.cs        # Securitas vault integration
 │   │
 │   └── Worker/                                  # Application Layer
 │       ├── Extensions/
@@ -463,6 +510,24 @@ Each handler:
 2. Updates the `PipelineContext`
 3. Passes control to the next handler
 4. Handles errors and logs results
+
+### Vault Services
+
+The service includes extensible vault service support for secure credential management:
+
+**Available Implementations:**
+- `EvaVaultService` - Integration with EVA vault system
+- `SecuritasVaultService` - Integration with Securitas vault system
+
+**Interface:**
+```csharp
+public interface IVaultService
+{
+    // Vault operations for secure credential retrieval
+}
+```
+
+Vault services can be used to retrieve connection strings and credentials securely instead of storing them in configuration files.
 
 ### Data Extraction (Dapper)
 
@@ -562,14 +627,14 @@ sudo journalctl -u datalake-ingestion -f
 **Sample Log:**
 ```
 [INF] Starting Data Lake Ingestion Service
-[INF] Loaded 3 dataset configurations
-[INF] Scheduled job for dataset: sales-daily-sqlserver with cron: 0 0 2 * * ?
-[INF] Starting ingestion for dataset: sales-daily-sqlserver
-[INF] Executing SQL Server query: dbo.sp_GetDailySales
+[INF] Loaded 2 dataset configurations
+[INF] Scheduled job for dataset: Trades-daily-sqlserver with cron: 0 */2 * * * ?
+[INF] Starting ingestion for dataset: Trades-daily-sqlserver
+[INF] Executing SQL Server query: dbo.sp_GetDailyTrades
 [INF] Retrieved 15432 rows from SQL Server
 [INF] Successfully wrote 15432 rows to Parquet
-[INF] File uploaded successfully: C:\DataLake\Output\sales\2024\12\15\sales_20241215_020000.parquet
-[INF] Successfully completed ingestion, Duration: 12.34s
+[INF] Uploaded 3029 bytes to C:\temp\DataLake\Trades\Transcations\Trades_20251219_171200.parquet in 9ms
+[INF] Successfully completed ingestion for dataset: Trades-daily-sqlserver, Duration: 0.7953737s
 ```
 
 ## Development
