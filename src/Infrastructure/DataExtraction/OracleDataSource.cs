@@ -29,27 +29,65 @@ public class OracleDataSource : IDataSource
 
             var dynamicParams = new OracleDynamicParameters();
 
+            // Build parameter list for PL/SQL block
+            var paramList = new List<string>();
+
             // Add input parameters
             if (parameters != null)
             {
                 foreach (var param in parameters)
                 {
-                    dynamicParams.Add(param.Key, param.Value);
+                    // Remove colon prefix if present in parameter name
+                    var paramName = param.Key.TrimStart(':');
+                    
+                    _logger.LogDebug("Adding parameter {Name} = {Value} (Type: {Type})", 
+                        paramName, param.Value, param.Value?.GetType().Name ?? "null");
+                    
+                    // Add parameter without colon
+                    dynamicParams.Add(paramName, param.Value);
+                    
+                    // Add to parameter list WITH colon for PL/SQL block
+                    paramList.Add($":{paramName}");
                 }
             }
 
-            // Add REF CURSOR for result set (Oracle standard pattern)
-            dynamicParams.Add("p_cursor", dbType: OracleDbType.RefCursor, direction: ParameterDirection.Output);
+            // Add REF CURSOR for result set (without colon in parameter name)
+            dynamicParams.Add("p_cursor", 
+                dbType: OracleDbType.RefCursor, 
+                direction: ParameterDirection.Output);
+            
+            // Add cursor to parameter list WITH colon for PL/SQL block
+            paramList.Add(":p_cursor");
 
-            _logger.LogInformation("Executing Oracle package: {Query}", query);
+            // Determine if this is a package call
+            CommandType commandType;
+            string executionQuery;
+            
+            if (query.Contains("."))
+            {
+                // Package call - use PL/SQL anonymous block
+                commandType = CommandType.Text;
+                executionQuery = $"BEGIN {query}({string.Join(", ", paramList)}); END;";
+                
+                _logger.LogInformation("Executing Oracle package with PL/SQL block: {SqlCommand}", executionQuery);
+            }
+            else
+            {
+                // Standalone stored procedure
+                commandType = CommandType.StoredProcedure;
+                executionQuery = query;
+                
+                _logger.LogInformation("Executing Oracle stored procedure: {Query}", query);
+            }
 
+            // Execute the command
             await connection.ExecuteAsync(
-                query,
+                executionQuery,
                 dynamicParams,
-                commandType: CommandType.StoredProcedure,
+                commandType: commandType,
                 commandTimeout: 600);
 
-            // Retrieve REF CURSOR
+            // Retrieve REF CURSOR (without colon)
             var refCursorParam = dynamicParams.GetOracleParameter("p_cursor");
 
             if (refCursorParam?.Value == null || refCursorParam.Value == DBNull.Value)
@@ -58,7 +96,8 @@ public class OracleDataSource : IDataSource
             }
 
             var dataTable = new DataTable();
-                // Cast the parameter value to OracleRefCursor and get the reader
+            
+            // Cast the parameter value to OracleRefCursor and get the reader
             if (refCursorParam.Value is Oracle.ManagedDataAccess.Types.OracleRefCursor refCursor)
             {
                 using var reader = refCursor.GetDataReader();

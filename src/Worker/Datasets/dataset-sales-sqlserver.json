@@ -1,18 +1,18 @@
 {
-  "datasetId": "sales-daily-sqlserver",
-  "name": "Daily Sales Transactions",
-  "description": "Extract daily sales data from SQL Server",
+  "datasetId": "Trades-daily-sqlserver",
+  "name": "Daily Trades Transactions",
+  "description": "Extract daily Trades data from SQL Server",
   "enabled": true,
-  "cronExpression": "0 0 2 * * ?",
+  "cronExpression": "0 */5 * * * ?",
 
   "source": {
     "type": "SqlServer",
-    "connectionStringKey": "SalesSqlServer",
+    "connectionStringKey": "TradesSqlServer",
     "extractionType": "StoredProcedure",
-    "procedureName": "dbo.sp_GetDailySales",
+    "procedureName": "dbo.sp_GetDailyTrades",
     "parameters": {
       "StartDate": "2024-01-01",
-      "EndDate": "2024-12-31"
+      "EndDate": "2025-12-31"
     },
     "commandTimeout": 300
   },
@@ -20,7 +20,7 @@
   "transformations": [],
 
   "parquet": {
-    "fileNamePattern": "sales_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "fileNamePattern": "Trades_{date:yyyyMMdd}_{time:HHmmss}.parquet",
     "compressionCodec": "Snappy",
     "rowGroupSize": 10000,
     "enableStatistics": true
@@ -30,7 +30,7 @@
     "provider": "FileSystem",
     "fileSystemConfig": {
       "basePath": "",
-      "relativePath": "sales/{year}/{month}/{day}/"
+      "relativePath": "Trades/{year}/{month}/{day}/"
     },
     "overwriteExisting": false,
     "enableRetry": true,
@@ -44,8 +44,8 @@
   },
 
   "metadata": {
-    "owner": "Sales Team",
-    "contact": "sales-team@company.com",
-    "tags": ["sales", "daily", "transactions"]
+    "owner": "Trades Team",
+    "contact": "Trades-team@company.com",
+    "tags": ["Trades", "daily", "transactions"]
   }
 }

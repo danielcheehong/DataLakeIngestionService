@@ -1,4 +1,5 @@
 using System.Data;
+using System.Text.Json;
 using Dapper;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
@@ -28,24 +29,27 @@ public class SqlServerDataSource : IDataSource
             await connection.OpenAsync(cancellationToken);
 
             var dynamicParams = new DynamicParameters();
+
             if (parameters != null)
             {
                 foreach (var param in parameters)
                 {
-                    dynamicParams.Add(param.Key, param.Value);
+                    // Convert JsonElement if needed
+                    var value = ConvertParameterValue(param.Value);
+                    
+                    _logger.LogDebug("Adding parameter {Name} = {Value} (Type: {Type})", 
+                        param.Key, value, value?.GetType().Name ?? "null");
+                    
+                    dynamicParams.Add(param.Key, value);
                 }
             }
 
-            _logger.LogInformation("Executing SQL Server query: {Query}", query);
-
-            // Execute and get data reader
             var reader = await connection.ExecuteReaderAsync(
                 query,
                 dynamicParams,
                 commandType: CommandType.StoredProcedure,
-                commandTimeout: 300);
+                commandTimeout: 600);
 
-            // Convert to DataTable
             var dataTable = new DataTable();
             dataTable.Load(reader);
 
@@ -58,5 +62,29 @@ public class SqlServerDataSource : IDataSource
             _logger.LogError(ex, "Failed to extract data from SQL Server");
             throw new ExtractionException($"SQL Server extraction failed: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Converts parameter value from JsonElement to native type if needed
+    /// </summary>
+    private object? ConvertParameterValue(object? value)
+    {
+        if (value is JsonElement jsonElement)
+        {
+            return jsonElement.ValueKind switch
+            {
+                JsonValueKind.String => jsonElement.GetString(),
+                JsonValueKind.Number => jsonElement.TryGetInt32(out var intValue) ? intValue :
+                                       jsonElement.TryGetInt64(out var longValue) ? longValue :
+                                       jsonElement.TryGetDecimal(out var decimalValue) ? decimalValue :
+                                       jsonElement.GetDouble(),
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => null,
+                _ => jsonElement.GetRawText()
+            };
+        }
+
+        return value;
     }
 }

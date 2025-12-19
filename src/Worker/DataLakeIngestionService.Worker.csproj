@@ -9,6 +9,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="Datasets\dataset-hr-oracle.json.xyz" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Core\DataLakeIngestionService.Core.csproj" />
     <ProjectReference Include="..\Infrastructure\DataLakeIngestionService.Infrastructure.csproj" />
   </ItemGroup>

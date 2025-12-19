@@ -34,8 +34,10 @@ public class ExtractionHandler : BasePipelineHandler
                 ? p as Dictionary<string, object> 
                 : new Dictionary<string, object>();
 
-            // Execute extraction
+           
+           // Create data source based on source type such as "SqlServer" or "Oracle".
             var dataSource = _dataSourceFactory.Create(sourceType);
+            // Execute extraction
             context.ExtractedData = await dataSource.ExtractAsync(
                 connectionString,
                 query,
