@@ -230,6 +230,16 @@ public class ParquetWriterService : IParquetWriter
             }
             return result;
         }
+        else if (targetType == typeof(float))
+        {
+            var result = new float[rowCount];
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = dataTable.Rows[i][column];
+                result[i] = value == DBNull.Value ? 0f : Convert.ToSingle(value);
+            }
+            return result;
+        }
         else if (targetType == typeof(DateTime))
         {
             var result = new DateTime[rowCount];

@@ -3,7 +3,7 @@
   "name": "HR Employee Data",
   "description": "Extract employee data from Oracle HR database",
   "enabled": true,
-  "cronExpression": "0 */5 * * * ?",
+  "cronExpression": "0 */1 * * * ?",
 
   "source": {
     "type": "Oracle",
@@ -12,7 +12,7 @@
     "packageName": "HR_PKG",
     "procedureName": "GET_EMPLOYEE_DATA",
     "parameters": {
-      "p_department_id": 0,
+      "p_department_id": "0",
       "p_active_only": "Y"
     },
     "commandTimeout": 600

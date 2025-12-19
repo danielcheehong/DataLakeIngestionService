@@ -1,5 +1,4 @@
 using System.Data;
-using Dapper;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using Microsoft.Extensions.Logging;
@@ -9,6 +8,7 @@ namespace DataLakeIngestionService.Infrastructure.DataExtraction;
 
 public class OracleDataSource : IDataSource
 {
+    private const int _cmdTimeout = 600;
     private readonly ILogger<OracleDataSource> _logger;
 
     public OracleDataSource(ILogger<OracleDataSource> logger)
@@ -27,96 +27,168 @@ public class OracleDataSource : IDataSource
             using var connection = new OracleConnection(connectionString);
             await connection.OpenAsync(cancellationToken);
 
-            var dynamicParams = new OracleDynamicParameters();
-
-            // Build parameter list for PL/SQL block
-            var paramList = new List<string>();
-
-            // Add input parameters
-            if (parameters != null)
-            {
-                foreach (var param in parameters)
-                {
-                    // Remove colon prefix if present in parameter name
-                    var paramName = param.Key.TrimStart(':');
-                    
-                    _logger.LogDebug("Adding parameter {Name} = {Value} (Type: {Type})", 
-                        paramName, param.Value, param.Value?.GetType().Name ?? "null");
-                    
-                    // Add parameter without colon
-                    dynamicParams.Add(paramName, param.Value);
-                    
-                    // Add to parameter list WITH colon for PL/SQL block
-                    paramList.Add($":{paramName}");
-                }
-            }
-
-            // Add REF CURSOR for result set (without colon in parameter name)
-            dynamicParams.Add("p_cursor", 
-                dbType: OracleDbType.RefCursor, 
-                direction: ParameterDirection.Output);
-            
-            // Add cursor to parameter list WITH colon for PL/SQL block
-            paramList.Add(":p_cursor");
-
-            // Determine if this is a package call
-            CommandType commandType;
-            string executionQuery;
-            
+            // Check if query is a package call
             if (query.Contains("."))
             {
-                // Package call - use PL/SQL anonymous block
-                commandType = CommandType.Text;
-                executionQuery = $"BEGIN {query}({string.Join(", ", paramList)}); END;";
-                
-                _logger.LogInformation("Executing Oracle package with PL/SQL block: {SqlCommand}", executionQuery);
+                return await ExecutePackageProcedureAsync(connection, query, parameters, cancellationToken);
             }
             else
             {
-                // Standalone stored procedure
-                commandType = CommandType.StoredProcedure;
-                executionQuery = query;
-                
-                _logger.LogInformation("Executing Oracle stored procedure: {Query}", query);
+                return await ExecuteQueryAsync(connection, query, parameters, cancellationToken);
             }
-
-            // Execute the command
-            await connection.ExecuteAsync(
-                executionQuery,
-                dynamicParams,
-                commandType: commandType,
-                commandTimeout: 600);
-
-            // Retrieve REF CURSOR (without colon)
-            var refCursorParam = dynamicParams.GetOracleParameter("p_cursor");
-
-            if (refCursorParam?.Value == null || refCursorParam.Value == DBNull.Value)
-            {
-                throw new ExtractionException("REF CURSOR parameter was not populated by the stored procedure");
-            }
-
-            var dataTable = new DataTable();
-            
-            // Cast the parameter value to OracleRefCursor and get the reader
-            if (refCursorParam.Value is Oracle.ManagedDataAccess.Types.OracleRefCursor refCursor)
-            {
-                using var reader = refCursor.GetDataReader();
-                dataTable.Load(reader);
-            }
-            else
-            {
-                throw new ExtractionException(
-                    $"Expected OracleRefCursor but got {refCursorParam.Value.GetType().Name}");
-            }
-
-            _logger.LogInformation("Retrieved {RowCount} rows from Oracle", dataTable.Rows.Count);
-
-            return dataTable;
+        }
+        catch (OracleException ex)
+        {
+            _logger.LogError(ex, "Oracle error during extraction. Error code: {ErrorCode}, Message: {Message}", 
+                ex.Number, ex.Message);
+            throw new ExtractionException($"Oracle extraction failed: {ex.Message}", ex);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to extract data from Oracle");
             throw new ExtractionException($"Oracle extraction failed: {ex.Message}", ex);
         }
+    }
+
+    private async Task<DataTable> ExecutePackageProcedureAsync(
+        OracleConnection connection,
+        string packageProcedure,
+        Dictionary<string, object>? parameters,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandType = CommandType.StoredProcedure;
+        command.CommandText = packageProcedure;
+        command.CommandTimeout = _cmdTimeout;
+
+        _logger.LogInformation("Executing Oracle package procedure: {Procedure}", packageProcedure);
+
+        // Add input parameters IN ORDER from the dictionary
+        if (parameters != null)
+        {
+            foreach (var param in parameters)
+            {
+                var paramName = param.Key.TrimStart(':');
+                var oracleParam = new OracleParameter
+                {
+                    ParameterName = paramName,
+                    Value = param.Value ?? DBNull.Value,
+                    Direction = ParameterDirection.Input
+                };
+                command.Parameters.Add(oracleParam);
+
+                _logger.LogDebug("Added input parameter: {Name} = {Value} (Type: {Type})", 
+                    paramName, param.Value, param.Value?.GetType().Name ?? "null");
+            }
+        }
+
+        // Add output REF CURSOR parameter - MUST BE LAST
+        var cursorParam = new OracleParameter
+        {
+            ParameterName = "p_cursor",
+            OracleDbType = OracleDbType.RefCursor,
+            Direction = ParameterDirection.Output
+        };
+        command.Parameters.Add(cursorParam);
+
+        _logger.LogDebug("Added output cursor parameter: p_cursor");
+        _logger.LogDebug("Total parameters: {Count}", command.Parameters.Count);
+
+        // Execute the stored procedure
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        _logger.LogDebug("Command executed successfully. Retrieving REF CURSOR...");
+
+        // Read data from REF CURSOR
+        var dataTable = new DataTable();
+        
+        if (cursorParam.Value is Oracle.ManagedDataAccess.Types.OracleRefCursor refCursor)
+        {
+            using var reader = refCursor.GetDataReader();
+            dataTable.Load(reader);
+            
+            // Log DataTable schema for debugging type mismatches
+            _logger.LogDebug("Loaded DataTable schema from Oracle ({ColumnCount} columns, {RowCount} rows):", 
+                dataTable.Columns.Count, dataTable.Rows.Count);
+            
+            foreach (DataColumn col in dataTable.Columns)
+            {
+                var sampleValue = dataTable.Rows.Count > 0 ? dataTable.Rows[0][col] : null;
+                var sampleValueType = sampleValue == DBNull.Value ? "DBNull" : sampleValue?.GetType().Name ?? "null";
+                var sampleValueStr = sampleValue == DBNull.Value ? "DBNull" : sampleValue?.ToString() ?? "null";
+                
+                _logger.LogDebug("  Column '{Name}': DataType={Type}, AllowDBNull={AllowNull}, Sample={Sample} (ValueType={ValueType})", 
+                    col.ColumnName, 
+                    col.DataType.Name, 
+                    col.AllowDBNull,
+                    sampleValueStr,
+                    sampleValueType);
+            }
+            
+            _logger.LogInformation("Successfully retrieved {RowCount} rows from Oracle procedure {Procedure}", 
+                dataTable.Rows.Count, packageProcedure);
+        }
+        else
+        {
+            throw new ExtractionException(
+                $"Expected OracleRefCursor but got {cursorParam.Value?.GetType().Name ?? "null"}");
+        }
+
+        return dataTable;
+    }
+
+    private async Task<DataTable> ExecuteQueryAsync(
+        OracleConnection connection,
+        string sqlQuery,
+        Dictionary<string, object>? parameters,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandType = CommandType.Text;
+        command.CommandText = sqlQuery;
+        command.CommandTimeout = _cmdTimeout;
+
+        _logger.LogInformation("Executing Oracle query: {Query}", sqlQuery);
+
+        // Add parameters for direct SQL query
+        if (parameters != null)
+        {
+            foreach (var param in parameters)
+            {
+                var paramName = param.Key.TrimStart(':');
+                var oracleParam = new OracleParameter
+                {
+                    ParameterName = paramName,
+                    Value = param.Value ?? DBNull.Value
+                };
+                command.Parameters.Add(oracleParam);
+
+                _logger.LogDebug("Added parameter: {Name} = {Value}", paramName, param.Value);
+            }
+        }
+
+        var dataTable = new DataTable();
+        using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        dataTable.Load(reader);
+
+        // Log DataTable schema for SQL queries too
+        _logger.LogDebug("Loaded DataTable schema from Oracle query ({ColumnCount} columns, {RowCount} rows):", 
+            dataTable.Columns.Count, dataTable.Rows.Count);
+        
+        foreach (DataColumn col in dataTable.Columns)
+        {
+            var sampleValue = dataTable.Rows.Count > 0 ? dataTable.Rows[0][col] : null;
+            var sampleValueType = sampleValue == DBNull.Value ? "DBNull" : sampleValue?.GetType().Name ?? "null";
+            
+            _logger.LogDebug("  Column '{Name}': DataType={Type}, AllowDBNull={AllowNull}, ValueType={ValueType}", 
+                col.ColumnName, 
+                col.DataType.Name, 
+                col.AllowDBNull,
+                sampleValueType);
+        }
+
+        _logger.LogInformation("Retrieved {RowCount} rows from Oracle query", dataTable.Rows.Count);
+
+        return dataTable;
     }
 }

@@ -3,7 +3,7 @@
   "name": "Daily Trades Transactions",
   "description": "Extract daily Trades data from SQL Server",
   "enabled": true,
-  "cronExpression": "0 */5 * * * ?",
+  "cronExpression": "0 */2 * * * ?",
 
   "source": {
     "type": "SqlServer",
