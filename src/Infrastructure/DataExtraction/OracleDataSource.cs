@@ -151,7 +151,7 @@ public class OracleDataSource : IDataSource
         _logger.LogInformation("Executing Oracle query: {Query}", sqlQuery);
 
         // Add parameters for direct SQL query
-        if (parameters != null)
+        if (parameters != null && parameters.Count > 0)
         {
             foreach (var param in parameters)
             {
