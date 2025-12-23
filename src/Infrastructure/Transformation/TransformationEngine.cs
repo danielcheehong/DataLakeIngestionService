@@ -20,26 +20,16 @@ public class TransformationEngine : ITransformationEngine
     {
         var transformedData = data.Copy();
 
-        foreach (var step in steps.OrderBy(s => s.Name))
+        foreach (var step in steps)
         {
             _logger.LogInformation("Applying transformation step: {StepName}", step.Name);
+            
             transformedData = await step.TransformAsync(transformedData, cancellationToken);
+            
+            _logger.LogDebug("Transformation step {StepName} completed. Row count: {RowCount}",
+                step.Name, transformedData.Rows.Count);
         }
 
         return transformedData;
-    }
-}
-
-
-
-public class DataValidationStep : ITransformationStep
-{
-    public string Name => "DataValidation";
-
-    public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
-    {
-        // Implement validation logic
-        // For now, just return the data as-is
-        return Task.FromResult(data);
     }
 }

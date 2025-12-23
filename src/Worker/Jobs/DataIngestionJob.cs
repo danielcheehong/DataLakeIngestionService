@@ -1,4 +1,6 @@
 using DataLakeIngestionService.Core.Interfaces.Services;
+using DataLakeIngestionService.Core.Interfaces.Transformation;
+using DataLakeIngestionService.Core.Models;
 using DataLakeIngestionService.Core.Pipeline;
 using Microsoft.Extensions.Logging;
 using Quartz;
@@ -10,17 +12,20 @@ public class DataIngestionJob : IJob
 {
     private readonly ILogger<DataIngestionJob> _logger;
     private readonly IDatasetConfigurationService _configService;
+    private readonly ITransformationStepFactory _transformationStepFactory;
     private readonly DataPipeline _pipeline;
     private readonly IConfiguration _configuration;
 
     public DataIngestionJob(
         ILogger<DataIngestionJob> logger,
         IDatasetConfigurationService configService,
+        ITransformationStepFactory transformationStepFactory,
         DataPipeline pipeline,
         IConfiguration configuration)
     {
         _logger = logger;
         _configService = configService;
+        _transformationStepFactory = transformationStepFactory;
         _pipeline = pipeline;
         _configuration = configuration;
     }
@@ -62,6 +67,9 @@ public class DataIngestionJob : IJob
             // Generate file name from pattern
             var fileName = GenerateFileName(config.Parquet.FileNamePattern);
 
+            // Build transformation steps from dataset configuration
+            var transformationSteps = BuildTransformationSteps(config);
+
             // Build pipeline metadata
             var metadata = new Dictionary<string, object>
             {
@@ -69,6 +77,7 @@ public class DataIngestionJob : IJob
                 ["ConnectionString"] = connectionString,
                 ["Query"] = query,
                 ["Parameters"] = config.Source.Parameters,
+                ["TransformationSteps"] = transformationSteps,
                 ["UploadProvider"] = config.Upload.Provider.ToString(),
                 ["DestinationPath"] = config.Upload.FileSystemConfig?.RelativePath ?? config.Upload.AzureBlobConfig?.BlobPath ?? "",
                 ["FileName"] = fileName
@@ -105,5 +114,51 @@ public class DataIngestionJob : IJob
             .Replace("{time:HHmmss}", now.ToString("HHmmss"))
             .Replace("{date}", now.ToString("yyyyMMdd"))
             .Replace("{time}", now.ToString("HHmmss"));
+    }
+
+    private List<ITransformationStep> BuildTransformationSteps(DatasetConfiguration config)
+    {
+        var transformationSteps = new List<ITransformationStep>();
+        
+        if (config.Transformations?.Any() != true)
+        {
+            _logger.LogInformation("No transformations configured for dataset: {DatasetId}", 
+                config.DatasetId);
+            return transformationSteps;
+        }
+
+        _logger.LogInformation("Loading {Count} transformation steps for dataset: {DatasetId}", 
+            config.Transformations.Count(t => t.Enabled), 
+            config.DatasetId);
+
+        foreach (var transformConfig in config.Transformations
+            .Where(t => t.Enabled)
+            .OrderBy(t => t.Order))
+        {
+            try
+            {
+                var step = _transformationStepFactory.Create(
+                    transformConfig.Type,
+                    transformConfig.Config);
+                
+                transformationSteps.Add(step);
+                
+                _logger.LogDebug(
+                    "Loaded transformation step: {Type} (order: {Order}) for dataset: {DatasetId}", 
+                    transformConfig.Type, 
+                    transformConfig.Order,
+                    config.DatasetId);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, 
+                    "Failed to create transformation step '{Type}' for dataset: {DatasetId}", 
+                    transformConfig.Type, 
+                    config.DatasetId);
+                throw;
+            }
+        }
+
+        return transformationSteps;
     }
 }

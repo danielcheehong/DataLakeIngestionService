@@ -6,6 +6,7 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
 
 - **Multi-Database Support**: Extract from SQL Server (stored procedures) and Oracle (packages with REF CURSORs)
 - **Chain of Responsibility Pipeline**: Modular extraction → transformation → Parquet generation → upload pipeline
+- **Dynamic Transformation Discovery**: Auto-discovers transformation steps via reflection at startup
 - **Scheduled Execution**: Quartz.NET with cron expressions for flexible scheduling
 - **Cross-Platform**: Runs on Windows (as Windows Service) and Linux (as systemd daemon)
 - **Multiple Upload Targets**: FileSystem, Azure Blob Storage (AWS S3 and Axway ready for implementation)
@@ -47,6 +48,8 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
         │    └─ OracleDataSource (REF CURSOR)     │
         ├─────────────────────────────────────────┤
         │ 2. TransformationHandler                │
+        │    ├─ TransformationStepFactory (Auto-  │
+        │    │  discovery via Reflection)          │
         │    ├─ TransformationEngine               │
         │    ├─ DataCleansingStep                 │
         │    └─ DataValidationStep                │
@@ -293,8 +296,24 @@ Each dataset is defined in a JSON file in the `Datasets/` directory:
   },
 
   "transformations": [                        // Optional transformation steps
-    "DataCleansing",
-    "DataValidation"
+    {
+      "type": "DataCleansing",                 // Step class name (without "Step" suffix)
+      "enabled": true,                          // Enable/disable this step
+      "order": 1,                               // Execution order
+      "config": {                               // Step-specific configuration
+        "trimWhitespace": true,
+        "removeEmptyStrings": false
+      }
+    },
+    {
+      "type": "DataValidation",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "requiredColumns": ["EMPLOYEE_ID", "EMAIL"],
+        "validateEmail": true
+      }
+    }
   ],
 
   "parquet": {
@@ -459,7 +478,11 @@ DataLakeIngestionService/
 │   │   │   ├── OracleDataSource.cs             # Oracle REF CURSOR
 │   │   │   └── OracleDynamicParameters.cs      # Custom parameters
 │   │   ├── Transformation/
-│   │   │   └── TransformationEngine.cs         # Transformation steps
+│   │   │   ├── TransformationStepFactory.cs    # Auto-discovery factory
+│   │   │   ├── TransformationEngine.cs         # Orchestrator
+│   │   │   └── Common/
+│   │   │       ├── DataCleansingStep.cs        # Trim whitespace
+│   │   │       └── DataValidationStep.cs       # Validate columns
 │   │   ├── Parquet/
 │   │   │   └── ParquetWriterService.cs         # Parquet.Net writer
 │   │   ├── Services/
@@ -585,6 +608,153 @@ public class DataIngestionJob : IJob
 }
 ```
 
+### Transformation Step Factory
+
+The service uses a **factory pattern with auto-discovery** for transformation steps:
+
+**How It Works:**
+
+1. **Startup**: `TransformationStepFactory` scans assemblies at startup using reflection
+2. **Discovery**: Finds all classes implementing `ITransformationStep`
+3. **Registration**: Caches types in a dictionary (class name → Type)
+4. **Execution**: Creates instances on-demand with DI-resolved dependencies
+
+**Creating a New Transformation Step:**
+
+```csharp
+using System.Data;
+using DataLakeIngestionService.Core.Interfaces.Transformation;
+using Microsoft.Extensions.Logging;
+
+namespace DataLakeIngestionService.Infrastructure.Transformation.Common;
+
+public class DateFormatStep : ITransformationStep
+{
+    private readonly ILogger<DateFormatStep> _logger;
+    private readonly Dictionary<string, object> _config;
+
+    // Constructor: ILogger resolved from DI, config passed by factory
+    public DateFormatStep(
+        ILogger<DateFormatStep> logger,
+        Dictionary<string, object>? config = null)
+    {
+        _logger = logger;
+        _config = config ?? new Dictionary<string, object>();
+    }
+
+    public string Name => "DateFormat";
+
+    public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
+    {
+        var columns = GetConfigValue<string[]>("columns", Array.Empty<string>());
+        var outputFormat = GetConfigValue("outputFormat", "yyyy-MM-dd");
+        
+        _logger.LogInformation("Formatting date columns: {Columns}", string.Join(", ", columns));
+
+        foreach (DataRow row in data.Rows)
+        {
+            foreach (var columnName in columns)
+            {
+                if (!data.Columns.Contains(columnName) || row[columnName] == DBNull.Value)
+                    continue;
+
+                if (DateTime.TryParse(row[columnName].ToString(), out var dateValue))
+                {
+                    row[columnName] = dateValue.ToString(outputFormat);
+                }
+            }
+        }
+
+        return Task.FromResult(data);
+    }
+
+    private T GetConfigValue<T>(string key, T defaultValue)
+    {
+        if (!_config.TryGetValue(key, out var value))
+            return defaultValue;
+
+        try
+        {
+            if (value is T typedValue)
+                return typedValue;
+                
+            if (value is System.Text.Json.JsonElement jsonElement)
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<T>(jsonElement.GetRawText())
+                    ?? defaultValue;
+            }
+                
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch
+        {
+            return defaultValue;
+        }
+    }
+}
+```
+
+**Using in Dataset Configuration:**
+
+```json
+{
+  "datasetId": "sales-data",
+  "transformations": [
+    {
+      "type": "DataCleansing",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "trimWhitespace": true,
+        "removeEmptyStrings": false
+      }
+    },
+    {
+      "type": "DateFormat",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "columns": ["OrderDate", "ShipDate", "DeliveryDate"],
+        "outputFormat": "yyyy-MM-dd HH:mm:ss"
+      }
+    },
+    {
+      "type": "DataValidation",
+      "enabled": true,
+      "order": 3,
+      "config": {
+        "requiredColumns": ["CustomerId", "OrderId"],
+        "validateEmail": true
+      }
+    }
+  ]
+}
+```
+
+**Key Features:**
+
+- ✅ **Zero Configuration**: No factory modification needed for new steps
+- ✅ **Convention-Based**: Class name `DateFormatStep` → JSON type `"DateFormat"`
+- ✅ **DI Integration**: Constructor dependencies auto-resolved
+- ✅ **Per-Dataset Config**: Each step instance gets unique configuration
+- ✅ **Explicit Ordering**: `order` property controls execution sequence
+- ✅ **Hot Reload**: Adding new transformation classes is detected on service restart
+
+**Available Transformation Steps:**
+
+| Step | Type | Description | Config Options |
+|------|------|-------------|----------------|
+| **DataCleansingStep** | `DataCleansing` | Trims whitespace, removes empty strings | `trimWhitespace`, `removeEmptyStrings` |
+| **DataValidationStep** | `DataValidation` | Validates required columns, email formats | `requiredColumns`, `validateEmail` |
+
+**Extending with Custom Steps:**
+
+1. Create a class implementing `ITransformationStep`
+2. Place it in any project (Core or Infrastructure)
+3. Build the solution
+4. Reference it in dataset JSON using the class name (minus "Step" suffix)
+5. No code changes to factory or DI registration required!
+
 ## Deployment
 
 ### Windows Service
@@ -657,19 +827,93 @@ public class AwsS3Provider : IUploadProvider
 
 ### Adding Transformation Steps
 
-1. Implement `ITransformationStep`:
+1. Implement `ITransformationStep` in Infrastructure/Transformation/Common or any subfolder:
 ```csharp
-public class DataTypeConversionStep : ITransformationStep
+using System.Data;
+using DataLakeIngestionService.Core.Interfaces.Transformation;
+using Microsoft.Extensions.Logging;
+
+namespace DataLakeIngestionService.Infrastructure.Transformation.Common;
+
+public class ColumnMappingStep : ITransformationStep
 {
-    public string Name => "DataTypeConversion";
+    private readonly ILogger<ColumnMappingStep> _logger;
+    private readonly Dictionary<string, object> _config;
+
+    public ColumnMappingStep(
+        ILogger<ColumnMappingStep> logger,
+        Dictionary<string, object>? config = null)
+    {
+        _logger = logger;
+        _config = config ?? new Dictionary<string, object>();
+    }
+
+    public string Name => "ColumnMapping";
+
     public Task<DataTable> TransformAsync(DataTable data, CancellationToken ct)
     {
-        // Logic
+        // Read column mappings from config
+        var mappings = GetConfigValue<Dictionary<string, string>>("mappings", new());
+        
+        // Rename columns based on mappings
+        foreach (var mapping in mappings)
+        {
+            if (data.Columns.Contains(mapping.Key))
+            {
+                data.Columns[mapping.Key].ColumnName = mapping.Value;
+            }
+        }
+        
+        return Task.FromResult(data);
+    }
+
+    private T GetConfigValue<T>(string key, T defaultValue)
+    {
+        if (!_config.TryGetValue(key, out var value))
+            return defaultValue;
+
+        try
+        {
+            if (value is T typedValue)
+                return typedValue;
+            
+            if (value is System.Text.Json.JsonElement jsonElement)
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<T>(jsonElement.GetRawText())
+                    ?? defaultValue;
+            }
+                
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch
+        {
+            return defaultValue;
+        }
     }
 }
 ```
 
-2. Reference in dataset configuration
+2. Use in dataset JSON configuration:
+```json
+{
+  "transformations": [
+    {
+      "type": "ColumnMapping",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "mappings": {
+          "old_column_name": "new_column_name",
+          "EMPLOYEE_ID": "EmployeeId",
+          "DEPT_NAME": "DepartmentName"
+        }
+      }
+    }
+  ]
+}
+```
+
+3. **No factory or DI changes needed!** The `TransformationStepFactory` auto-discovers new implementations at startup
 
 ## Roadmap
 

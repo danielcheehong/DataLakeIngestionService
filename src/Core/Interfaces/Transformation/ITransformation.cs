@@ -15,3 +15,9 @@ public interface ITransformationEngine
         List<ITransformationStep> steps,
         CancellationToken cancellationToken);
 }
+
+public interface ITransformationStepFactory
+{
+    ITransformationStep Create(string stepName, Dictionary<string, object>? config = null);
+    IEnumerable<string> GetAvailableSteps();
+}

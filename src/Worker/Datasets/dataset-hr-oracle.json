@@ -2,7 +2,7 @@
   "datasetId": "hr-employees-oracle",
   "name": "HR Employee Data",
   "description": "Extract employee data from Oracle HR database",
-  "enabled": true,
+  "enabled": false,
   "cronExpression": "0 */1 * * * ?",
 
   "source": {
@@ -18,7 +18,26 @@
     "commandTimeout": 600
   },
 
-  "transformations": [],
+  "transformations": [
+    {
+      "type": "DataCleansing",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "trimWhitespace": true,
+        "removeEmptyStrings": false
+      }
+    },
+    {
+      "type": "DataValidation",
+      "enabled": true,
+      "order": 2,
+      "config": {
+        "requiredColumns": ["EMPLOYEE_ID", "EMAIL", "HIRE_DATE"],
+        "validateEmail": true
+      }
+    }
+  ],
 
   "parquet": {
     "fileNamePattern": "hr_employees_{date:yyyyMMdd}_{time:HHmmss}.parquet",

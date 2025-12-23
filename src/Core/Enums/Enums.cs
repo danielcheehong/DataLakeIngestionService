@@ -13,18 +13,6 @@ public enum ExtractionType
     Query
 }
 
-public enum TransformationType
-{
-    DataCleansing,
-    DataValidation,
-    DataTypeConversion,
-    DataFiltering,
-    DataEnrichment,
-    ColumnMapping,
-    NullHandling,
-    DateFormat
-}
-
 public enum UploadProviderType
 {
     FileSystem,

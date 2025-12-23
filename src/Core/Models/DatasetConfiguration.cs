@@ -33,7 +33,7 @@ public class SourceConfiguration
 
 public class TransformationConfiguration
 {
-    public TransformationType Type { get; set; }
+    public string Type { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
     public int Order { get; set; }
     public Dictionary<string, object> Config { get; set; } = new();

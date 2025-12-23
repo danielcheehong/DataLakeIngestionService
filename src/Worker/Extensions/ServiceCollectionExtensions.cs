@@ -46,6 +46,7 @@ public static class ServiceCollectionExtensions
 
         // Register Infrastructure Services
         services.AddScoped<IDataSourceFactory, DataSourceFactory>();
+        services.AddSingleton<ITransformationStepFactory, TransformationStepFactory>();
         services.AddScoped<ITransformationEngine, TransformationEngine>();
         services.AddScoped<IParquetWriter, ParquetWriterService>();
         services.AddScoped<IUploadProviderFactory, UploadProviderFactory>();
