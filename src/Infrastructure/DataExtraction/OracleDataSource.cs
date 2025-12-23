@@ -64,7 +64,7 @@ public class OracleDataSource : IDataSource
         _logger.LogInformation("Executing Oracle package procedure: {Procedure}", packageProcedure);
 
         // Add input parameters IN ORDER from the dictionary
-        if (parameters != null)
+        if (parameters != null && parameters.Count > 0)
         {
             foreach (var param in parameters)
             {

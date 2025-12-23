@@ -30,7 +30,7 @@ public class SqlServerDataSource : IDataSource
 
             var dynamicParams = new DynamicParameters();
 
-            if (parameters != null)
+            if (parameters != null && parameters.Count > 0)
             {
                 foreach (var param in parameters)
                 {
