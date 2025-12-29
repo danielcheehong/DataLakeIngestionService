@@ -4,6 +4,7 @@ using DataLakeIngestionService.Core.Interfaces.Parquet;
 using DataLakeIngestionService.Core.Interfaces.Services;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Interfaces.Upload;
+using DataLakeIngestionService.Core.Interfaces.Vault;
 using DataLakeIngestionService.Core.Pipeline;
 using DataLakeIngestionService.Infrastructure.DataExtraction;
 using DataLakeIngestionService.Infrastructure.Parquet;
@@ -11,6 +12,7 @@ using DataLakeIngestionService.Infrastructure.Services;
 using DataLakeIngestionService.Infrastructure.Transformation;
 using DataLakeIngestionService.Infrastructure.Upload;
 using DataLakeIngestionService.Infrastructure.Upload.Providers;
+using DataLakeIngestionService.Infrastructure.Vault;
 using DataLakeIngestionService.Worker.Jobs;
 using DataLakeIngestionService.Worker.Services;
 using Quartz;
@@ -50,6 +52,30 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITransformationEngine, TransformationEngine>();
         services.AddScoped<IParquetWriter, ParquetWriterService>();
         services.AddScoped<IUploadProviderFactory, UploadProviderFactory>();
+
+        // Register HttpClient for vault services
+        services.AddHttpClient("VaultClient")
+            .ConfigureHttpClient(client =>
+            {
+                client.Timeout = TimeSpan.FromSeconds(30);
+            });
+
+        // Register Memory Cache for password caching
+        services.AddMemoryCache();
+
+        // Register Vault Service based on configuration
+        services.AddSingleton<IVaultService>(sp =>
+        {
+            var config = sp.GetRequiredService<IConfiguration>();
+            var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
+            var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
+            
+            var factory = new VaultServiceFactory(config, httpClientFactory, loggerFactory);
+            return factory.Create();
+        });
+
+        // Register Connection String Builder
+        services.AddScoped<IConnectionStringBuilder, ConnectionStringBuilder>();
 
         // Register Configuration Service
         var datasetsPath = configuration.GetValue<string>("Datasets:ConfigurationPath") ?? "./Datasets";

@@ -13,6 +13,7 @@ public class DataIngestionJob : IJob
     private readonly ILogger<DataIngestionJob> _logger;
     private readonly IDatasetConfigurationService _configService;
     private readonly ITransformationStepFactory _transformationStepFactory;
+    private readonly IConnectionStringBuilder _connectionStringBuilder;
     private readonly DataPipeline _pipeline;
     private readonly IConfiguration _configuration;
 
@@ -20,12 +21,14 @@ public class DataIngestionJob : IJob
         ILogger<DataIngestionJob> logger,
         IDatasetConfigurationService configService,
         ITransformationStepFactory transformationStepFactory,
+        IConnectionStringBuilder connectionStringBuilder,
         DataPipeline pipeline,
         IConfiguration configuration)
     {
         _logger = logger;
         _configService = configService;
         _transformationStepFactory = transformationStepFactory;
+        _connectionStringBuilder = connectionStringBuilder;
         _pipeline = pipeline;
         _configuration = configuration;
     }
@@ -37,8 +40,10 @@ public class DataIngestionJob : IJob
         try
         {
             _logger.LogInformation("Starting ingestion for dataset: {DatasetId}", datasetId);
-
+            
+            // Retrieve dataset configuration from the configuration json files in the Datasets folder.
             var config = await _configService.GetDatasetByIdAsync(datasetId!);
+
             if (config == null)
             {
                 _logger.LogWarning("Dataset configuration not found: {DatasetId}", datasetId);
@@ -51,13 +56,20 @@ public class DataIngestionJob : IJob
                 return;
             }
 
-            // Get connection string from configuration
-            var connectionString = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
-            if (string.IsNullOrEmpty(connectionString))
+            // Get connection string template from configuration
+            var connectionStringTemplate = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
+
+            if (string.IsNullOrEmpty(connectionStringTemplate))
             {
                 _logger.LogError("Connection string not found: {Key}", config.Source.ConnectionStringKey);
                 throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
             }
+
+            // Build connection string with vault password resolution.
+            
+            var connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
+                connectionStringTemplate, 
+                context.CancellationToken);
 
             // Build query from configuration
             var query = config.Source.ExtractionType == Core.Enums.ExtractionType.Package

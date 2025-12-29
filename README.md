@@ -148,8 +148,211 @@ Edit `src/Worker/appsettings.json`:
   "AzureBlob": {
     "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;",
     "DefaultContainer": "raw-data"
+  },
+
+  "VaultConfiguration": {
+    "Provider": "securitas",
+    "BaseUrl": "https://vault.example.com/api/v1",
+    "AuthToken": "",
+    "ApiKey": ""
   }
 }
+```
+
+### 2a. Secure Credential Management with Vault Placeholders
+
+The service supports secure credential management through vault integration. Instead of storing passwords directly in configuration files, use **vault placeholders** that are resolved at runtime.
+
+#### Vault Placeholder Syntax
+
+Use the following syntax in connection strings to reference secrets stored in vault systems:
+
+```
+{vault:path/to/secret}
+```
+
+**Example - SQL Server with Vault:**
+```json
+"ConnectionStrings": {
+  "TradesSqlServer": "Server=prod-sql.company.com;Database=Trades;User Id=sa;Password={vault:production/sqlserver/trades_password};TrustServerCertificate=true;"
+}
+```
+
+**Example - Oracle with Vault:**
+```json
+"ConnectionStrings": {
+  "HROracleDB": "Data Source=prod-oracle:1521/PROD;User Id=hr_service;Password={vault:production/oracle/hr_password};"
+}
+```
+
+#### How Vault Resolution Works
+
+1. **Configuration**: Connection strings contain `{vault:...}` placeholders
+2. **Runtime Detection**: `ConnectionStringBuilder` uses regex pattern `\{vault:([^}]+)\}` to detect placeholders
+3. **Vault Lookup**: Configured vault service (EVA or Securitas) retrieves the actual secret
+4. **Caching**: Retrieved secrets are cached in memory for 5 minutes to reduce vault API calls
+5. **Connection**: The resolved connection string (with actual password) is used for database connections
+
+#### Vault Configuration
+
+Configure vault provider settings in `appsettings.json`:
+
+```json
+{
+  "VaultConfiguration": {
+    "Provider": "securitas",
+    "BaseUrl": "https://vault.company.com/api/v1",
+    "AuthToken": "${VAULT_AUTH_TOKEN}",
+    "ApiKey": "${VAULT_API_KEY}"
+  }
+}
+```
+
+**Configuration Properties:**
+
+| Property | Required | Description | Example |
+|----------|----------|-------------|---------||
+| `Provider` | Yes | Vault service provider | `"securitas"` or `"eva"` |
+| `BaseUrl` | Yes | Vault API endpoint | `"https://vault.example.com/api/v1"` |
+| `AuthToken` | For Securitas | Bearer token for authentication | `"${VAULT_AUTH_TOKEN}"` (from env var) |
+| `ApiKey` | For EVA | API key for authentication | `"${VAULT_API_KEY}"` (from env var) |
+
+**Available Vault Providers:**
+
+| Provider | Implementation | Authentication Method |
+|----------|----------------|----------------------|
+| `securitas` | `SecuritasVaultService` | Bearer token (Authorization header) |
+| `eva` | `EvaVaultService` | API key (X-API-Key header) |
+
+#### Environment-Specific Configuration
+
+**Development (Local Testing):**
+
+For local development without vault access, use **plaintext passwords without placeholders**:
+
+```json
+// appsettings.Development.json
+{
+  "ConnectionStrings": {
+    "TradesSqlServer": "Server=localhost;Database=Trades;User Id=sa;Password=LocalDevPassword123!;",
+    "HROracleDB": "Data Source=localhost:1521/XEPDB1;User Id=hr_service;Password=ServicePassword123!;"
+  }
+}
+```
+
+When no `{vault:...}` placeholders are detected, `ConnectionStringBuilder` returns the connection string unchanged with **no vault service calls**.
+
+**Staging:**
+
+```json
+// appsettings.Staging.json
+{
+  "VaultConfiguration": {
+    "Provider": "eva",
+    "BaseUrl": "https://vault.staging.example.com/api/v1",
+    "AuthToken": "${VAULT_AUTH_TOKEN}"
+  },
+  "ConnectionStrings": {
+    "TradesSqlServer": "Server=staging-sql.company.com;Database=Trades;User Id=app_user;Password={vault:staging/sqlserver/trades_password};",
+    "HROracleDB": "Data Source=staging-oracle:1521/STAGE;User Id=hr_service;Password={vault:staging/oracle/hr_password};"
+  }
+}
+```
+
+**Production:**
+
+```json
+// appsettings.Production.json
+{
+  "VaultConfiguration": {
+    "Provider": "securitas",
+    "BaseUrl": "https://vault.production.example.com/api/v1",
+    "AuthToken": "${VAULT_AUTH_TOKEN}"
+  },
+  "ConnectionStrings": {
+    "TradesSqlServer": "Server=prod-sql.company.com;Database=Trades;User Id=app_user;Password={vault:production/sqlserver/trades_password};",
+    "HROracleDB": "Data Source=prod-oracle:1521/PROD;User Id=hr_service;Password={vault:production/oracle/hr_password};"
+  }
+}
+```
+
+#### Multiple Vault Placeholders
+
+You can use multiple vault placeholders in a single connection string:
+
+```json
+"TradesSqlServer": "Server=localhost;Database=Trades;User Id={vault:sqlserver/trades_username};Password={vault:sqlserver/trades_password};"
+```
+
+All placeholders are independently resolved and replaced with their respective secrets.
+
+#### Security Best Practices
+
+✅ **DO:**
+- Use vault placeholders for production and staging environments
+- Store vault authentication tokens in environment variables (e.g., `${VAULT_AUTH_TOKEN}`)
+- Use plaintext passwords only in local development (appsettings.Development.json)
+- Keep development and production connection strings in separate environment-specific files
+- Restrict file system permissions on appsettings files in production
+- Use different vault paths for different environments (e.g., `production/`, `staging/`)
+
+❌ **DON'T:**
+- Commit plaintext production passwords to source control
+- Use vault placeholders without configuring VaultConfiguration section
+- Store vault auth tokens directly in configuration files (use environment variables)
+- Use production credentials in development or staging environments
+- Share vault paths between environments
+
+#### Troubleshooting Vault Configuration
+
+**Error: "Vault provider not configured"**
+
+```log
+[ERR] System.InvalidOperationException: Vault provider not configured
+```
+
+**Solution:** Add `VaultConfiguration` section to appsettings.json with `Provider` property set to either `"securitas"` or `"eva"`.
+
+---
+
+**Error: Vault placeholder not resolved**
+
+```log
+[WRN] Failed to resolve vault placeholder: production/sqlserver/password
+```
+
+**Possible causes:**
+- Vault service authentication failed (check AuthToken/ApiKey)
+- Vault path doesn't exist or has incorrect permissions
+- Network connectivity issues to vault service
+- Vault service BaseUrl is incorrect
+
+**Solution:** 
+- Verify vault credentials are set in environment variables
+- Test vault API endpoint manually using curl or Postman
+- Check vault service logs for permission errors
+- Ensure firewall rules allow access to vault service
+
+---
+
+**Info: "No vault placeholders found"**
+
+```log
+[DBG] No vault placeholders found in connection string
+```
+
+**This is normal** when using plaintext passwords (typical in development). The connection string is used as-is without vault resolution.
+
+---
+
+**Example Log - Successful Vault Resolution:**
+
+```log
+[INF] Found 1 vault placeholders to resolve
+[DBG] Resolving vault placeholder: production/sqlserver/trades_password
+[DBG] Retrieved secret from vault (cached for 5 minutes)
+[INF] Successfully resolved all vault placeholders
+[INF] Executing SQL Server query: dbo.sp_GetDailyTrades
 ```
 
 ### 3. Create Dataset Configuration
