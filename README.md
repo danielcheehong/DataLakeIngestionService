@@ -458,6 +458,389 @@ sudo ./install-daemon.sh
 
 ## Configuration Details
 
+### Application Settings Overview
+
+The service uses a hierarchical configuration system with environment-specific overrides:
+- `appsettings.json` - Base configuration (committed to source control)
+- `appsettings.Development.json` - Local development overrides
+- `appsettings.Staging.json` - Staging environment overrides
+- `appsettings.Production.json` - Production environment overrides
+
+Environment-specific files override base settings and are typically excluded from source control to protect sensitive credentials.
+
+### VaultConfiguration Section
+
+Configure the vault service provider for secure credential management:
+
+```json
+{
+  "VaultConfiguration": {
+    "Provider": "securitas",
+    "BaseUrl": "https://vault.example.com/api/v1",
+    "AuthToken": "",
+    "ApiKey": ""
+  }
+}
+```
+
+**Configuration Properties:**
+
+| Property | Required | Description | Used By |
+|----------|----------|-------------|---------|
+| `Provider` | Yes | Vault service provider name (`"securitas"` or `"eva"`) | Both providers |
+| `BaseUrl` | Yes | Base URL of the vault API endpoint | Both providers |
+| `AuthToken` | Conditional | Bearer token for authentication | Securitas only |
+| `ApiKey` | Conditional | API key for authentication | EVA only |
+
+**Available Providers:**
+
+| Provider Value | Implementation | Authentication Method | HTTP Header |
+|----------------|----------------|----------------------|-------------|
+| `"securitas"` | `SecuritasVaultService` | Bearer token | `Authorization: Bearer {token}` |
+| `"eva"` | `EvaVaultService` | API key | `X-API-Key: {key}` |
+
+**Environment-Specific Examples:**
+
+```json
+// Development - May use development vault or plaintext passwords
+{
+  "VaultConfiguration": {
+    "Provider": "securitas",
+    "BaseUrl": "https://vault.dev.example.com/api/v1",
+    "AuthToken": "dev-token-123",
+    "ApiKey": ""
+  }
+}
+
+// Staging - EVA vault with environment variable
+{
+  "VaultConfiguration": {
+    "Provider": "eva",
+    "BaseUrl": "https://vault.staging.example.com/api/v1",
+    "AuthToken": "",
+    "ApiKey": "${VAULT_API_KEY}"
+  }
+}
+
+// Production - Securitas vault with environment variable
+{
+  "VaultConfiguration": {
+    "Provider": "securitas",
+    "BaseUrl": "https://vault.production.example.com/api/v1",
+    "AuthToken": "${VAULT_AUTH_TOKEN}",
+    "ApiKey": ""
+  }
+}
+```
+
+**How Vault Integration Works:**
+
+1. **Startup**: `VaultServiceFactory` reads `VaultConfiguration` and instantiates the appropriate vault service
+2. **Detection**: `ConnectionStringBuilder` uses regex to detect `{vault:path}` placeholders in connection strings
+3. **Resolution**: The vault service retrieves secrets from the configured vault endpoint
+4. **Caching**: Retrieved secrets are cached in memory for 5 minutes to minimize API calls
+5. **Connection**: Resolved connection strings (with actual passwords) are used for database connections
+
+**Security Best Practices:**
+
+✅ **DO:**
+- Use environment variables for `AuthToken` and `ApiKey` (e.g., `"${VAULT_AUTH_TOKEN}"`)
+- Use different vault endpoints per environment
+- Restrict vault credentials to read-only permissions for specific secret paths
+- Rotate vault credentials regularly according to security policies
+
+❌ **DON'T:**
+- Hardcode vault credentials in appsettings files
+- Commit vault credentials to source control
+- Use production vault credentials in non-production environments
+- Share vault credentials across multiple services
+
+### FileSystemProvider Section
+
+Configure local or network file system storage for Parquet files:
+
+```json
+{
+  "FileSystemProvider": {
+    "BasePath": "C:\\temp\\DataLake",
+    "MaxRetries": 3
+  }
+}
+```
+
+**Configuration Properties:**
+
+| Property | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `BasePath` | Yes | - | Root directory path for storing Parquet files |
+| `MaxRetries` | No | 3 | Number of retry attempts for failed file operations |
+
+**Platform-Specific Path Formats:**
+
+```json
+// Windows
+{
+  "FileSystemProvider": {
+    "BasePath": "C:\\temp\\DataLake",
+    "MaxRetries": 3
+  }
+}
+
+// Linux/Unix
+{
+  "FileSystemProvider": {
+    "BasePath": "/var/datalake",
+    "MaxRetries": 3
+  }
+}
+
+// Network share (Windows)
+{
+  "FileSystemProvider": {
+    "BasePath": "\\\\server\\share\\DataLake",
+    "MaxRetries": 5
+  }
+}
+
+// Mounted network drive (Linux)
+{
+  "FileSystemProvider": {
+    "BasePath": "/mnt/datalake",
+    "MaxRetries": 5
+  }
+}
+```
+
+**Environment-Specific Examples:**
+
+```json
+// Development - Local temp directory
+{
+  "FileSystemProvider": {
+    "BasePath": "C:\\Temp\\DataLake",
+    "MaxRetries": 3
+  }
+}
+
+// Staging - Dedicated staging directory
+{
+  "FileSystemProvider": {
+    "BasePath": "/var/datalake/staging",
+    "MaxRetries": 5
+  }
+}
+
+// Production - Production data lake mount
+{
+  "FileSystemProvider": {
+    "BasePath": "/mnt/datalake/production",
+    "MaxRetries": 5
+  }
+}
+```
+
+**Path Resolution:**
+
+The `BasePath` is combined with the dataset's `Upload.Path` configuration to determine the final file location:
+
+```
+Final Path = {BasePath}/{Upload.Path}/{FileName}
+Example: C:\temp\DataLake\trades\2024\12\29\trades_20241229_153045.parquet
+```
+
+**File Operation Retry Logic:**
+
+When `MaxRetries` is configured:
+- File write operations automatically retry on transient failures
+- Exponential backoff between retry attempts
+- Useful for network file systems with intermittent connectivity
+
+**Permissions Requirements:**
+
+Ensure the service account has:
+- **Read/Write** permissions on the `BasePath` directory
+- **Create subdirectories** permission for dataset-specific paths
+- Sufficient **disk space** for Parquet file storage
+
+### AzureBlob Section
+
+Configure Azure Blob Storage as an upload destination:
+
+```json
+{
+  "AzureBlob": {
+    "ConnectionString": "",
+    "DefaultContainer": "raw-data"
+  }
+}
+```
+
+**Configuration Properties:**
+
+| Property | Required | Description | Example |
+|----------|----------|-------------|---------|
+| `ConnectionString` | Yes | Azure Storage account connection string | Can use vault placeholder |
+| `DefaultContainer` | Yes | Default blob container name for uploads | `"raw-data"`, `"parquet-files"` |
+
+**Connection String Formats:**
+
+```json
+// Using vault placeholder (recommended for production)
+{
+  "AzureBlob": {
+    "ConnectionString": "{vault:azure/storage_connection_string}",
+    "DefaultContainer": "raw-data"
+  }
+}
+
+// Using standard connection string (development only)
+{
+  "AzureBlob": {
+    "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=myaccount;AccountKey=mykey;EndpointSuffix=core.windows.net",
+    "DefaultContainer": "dev-data"
+  }
+}
+
+// Using Azurite local emulator (development)
+{
+  "AzureBlob": {
+    "ConnectionString": "UseDevelopmentStorage=true",
+    "DefaultContainer": "dev-data"
+  }
+}
+
+// Using Managed Identity (production - requires code changes)
+{
+  "AzureBlob": {
+    "ConnectionString": "BlobEndpoint=https://myaccount.blob.core.windows.net/",
+    "DefaultContainer": "raw-data"
+  }
+}
+```
+
+**Environment-Specific Examples:**
+
+```json
+// Development - Azurite local emulator
+{
+  "AzureBlob": {
+    "ConnectionString": "UseDevelopmentStorage=true",
+    "DefaultContainer": "dev-data"
+  }
+}
+
+// Staging - Staging storage account with vault
+{
+  "AzureBlob": {
+    "ConnectionString": "{vault:staging/azure/storage_connection}",
+    "DefaultContainer": "staging-raw-data"
+  }
+}
+
+// Production - Production storage account with vault
+{
+  "AzureBlob": {
+    "ConnectionString": "{vault:production/azure/storage_connection}",
+    "DefaultContainer": "raw-data"
+  }
+}
+```
+
+**Container Naming Conventions:**
+
+Azure Blob container names must follow these rules:
+- Lowercase letters, numbers, and hyphens only
+- Must start with a letter or number
+- Length: 3-63 characters
+- No consecutive hyphens
+
+**Valid Examples:**
+- ✅ `raw-data`
+- ✅ `parquet-files`
+- ✅ `trades-data-2024`
+
+**Invalid Examples:**
+- ❌ `Raw-Data` (uppercase)
+- ❌ `-raw-data` (starts with hyphen)
+- ❌ `raw--data` (consecutive hyphens)
+
+**Using with Dataset Configuration:**
+
+The `DefaultContainer` can be overridden per dataset:
+
+```json
+// Dataset configuration
+{
+  "upload": {
+    "provider": "AzureBlob",
+    "container": "trades-data",  // Overrides DefaultContainer
+    "path": "trades/{year}/{month}/{day}",
+    "fileNamePattern": "trades_{timestamp}.parquet"
+  }
+}
+```
+
+If `container` is not specified in the dataset configuration, `DefaultContainer` from `AzureBlob` section is used.
+
+**Blob Path Structure:**
+
+Final blob path is constructed as:
+
+```
+{Container}/{Upload.Path}/{FileName}
+Example: raw-data/trades/2024/12/29/trades_20241229_153045.parquet
+```
+
+**Security Best Practices:**
+
+✅ **DO:**
+- Use vault placeholders for connection strings in non-development environments
+- Use separate storage accounts for different environments
+- Enable Azure Storage firewall rules to restrict access
+- Use Shared Access Signatures (SAS) with minimal permissions when possible
+- Rotate storage account keys regularly
+- Enable blob versioning for audit trails
+
+❌ **DON'T:**
+- Commit connection strings with account keys to source control
+- Use production storage accounts in development environments
+- Grant excessive permissions (prefer read/write to specific containers only)
+- Disable HTTPS (always use secure connections)
+
+**Troubleshooting:**
+
+**Error: "Container not found"**
+```log
+[ERR] Azure.RequestFailedException: The specified container does not exist
+```
+**Solution:** 
+- Verify the container name matches exactly (case-sensitive in connection string, case-insensitive in Azure)
+- Check if container exists in the storage account
+- Ensure the connection string has permissions to access the container
+
+---
+
+**Error: "Authentication failed"**
+```log
+[ERR] Azure.RequestFailedException: Server failed to authenticate the request
+```
+**Solution:**
+- Verify the connection string is correct and not expired
+- Check if storage account key has been rotated
+- Ensure vault placeholder is resolving correctly (if used)
+- Verify firewall rules allow access from the service's IP address
+
+---
+
+**Error: "Blob name is invalid"**
+```log
+[ERR] Azure.RequestFailedException: The specified blob name contains invalid characters
+```
+**Solution:**
+- Check `upload.path` and `fileNamePattern` in dataset configuration
+- Ensure no special characters except `/`, `-`, `_`, `.` in blob paths
+- Verify date/time placeholders are resolving correctly
+
 ### Datasets Configuration
 
 The service supports hot-reloading of dataset configurations. Configure in `appsettings.json`:
