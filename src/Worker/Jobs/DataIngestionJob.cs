@@ -36,23 +36,29 @@ public class DataIngestionJob : IJob
     public async Task Execute(IJobExecutionContext context)
     {
         var datasetId = context.JobDetail.JobDataMap.GetString("DatasetId");
+        
+        // Generate unique execution ID: datasetId.timestamp-shortGuid
+        var executionId = $"{datasetId}.{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
 
         try
         {
-            _logger.LogInformation("Starting ingestion for dataset: {DatasetId}", datasetId);
+            _logger.LogInformation("Starting ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
+                datasetId, executionId);
             
             // Retrieve dataset configuration from the configuration json files in the Datasets folder.
             var config = await _configService.GetDatasetByIdAsync(datasetId!);
 
             if (config == null)
             {
-                _logger.LogWarning("Dataset configuration not found: {DatasetId}", datasetId);
+                _logger.LogWarning("Dataset configuration not found: {DatasetId}, ExecutionId: {ExecutionId}", 
+                    datasetId, executionId);
                 return;
             }
 
             if (!config.Enabled)
             {
-                _logger.LogInformation("Dataset is disabled: {DatasetId}", datasetId);
+                _logger.LogInformation("Dataset is disabled: {DatasetId}, ExecutionId: {ExecutionId}", 
+                    datasetId, executionId);
                 return;
             }
 
@@ -61,7 +67,8 @@ public class DataIngestionJob : IJob
 
             if (string.IsNullOrEmpty(connectionStringTemplate))
             {
-                _logger.LogError("Connection string not found: {Key}", config.Source.ConnectionStringKey);
+                _logger.LogError("Connection string not found: {Key}, ExecutionId: {ExecutionId}", 
+                    config.Source.ConnectionStringKey, executionId);
                 throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
             }
 
@@ -80,11 +87,13 @@ public class DataIngestionJob : IJob
             var fileName = GenerateFileName(config.Parquet.FileNamePattern);
 
             // Build transformation steps from dataset configuration
-            var transformationSteps = BuildTransformationSteps(config);
+            var transformationSteps = BuildTransformationSteps(config, executionId);
 
             // Build pipeline metadata
             var metadata = new Dictionary<string, object>
             {
+                ["DatasetId"] = datasetId!,
+                ["ExecutionId"] = executionId,
                 ["SourceType"] = config.Source.Type.ToString(),
                 ["ConnectionString"] = connectionString,
                 ["Query"] = query,
@@ -95,25 +104,26 @@ public class DataIngestionJob : IJob
                 ["FileName"] = fileName
             };
 
-            // Execute pipeline
-            var result = await _pipeline.ExecuteAsync(metadata, context.CancellationToken);
+            // Execute pipeline with execution ID as JobId
+            var result = await _pipeline.ExecuteAsync(metadata, executionId, context.CancellationToken);
 
             if (result.IsSuccess)
             {
                 _logger.LogInformation(
-                    "Successfully completed ingestion for dataset: {DatasetId}, Duration: {Duration}s, Upload: {Uri}",
-                    datasetId, result.TotalDuration.TotalSeconds, result.UploadUri);
+                    "Successfully completed ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}, Duration: {Duration}s, Upload: {Uri}",
+                    datasetId, executionId, result.TotalDuration.TotalSeconds, result.UploadUri);
             }
             else
             {
                 _logger.LogError(
-                    "Ingestion failed for dataset: {DatasetId}, Errors: {ErrorCount}",
-                    datasetId, result.Errors.Count);
+                    "Ingestion failed for dataset: {DatasetId}, ExecutionId: {ExecutionId}, Errors: {ErrorCount}",
+                    datasetId, executionId, result.Errors.Count);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed ingestion for dataset: {DatasetId}", datasetId);
+            _logger.LogError(ex, "Failed ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
+                datasetId, executionId);
             throw new JobExecutionException(ex, refireImmediately: false);
         }
     }
@@ -128,20 +138,20 @@ public class DataIngestionJob : IJob
             .Replace("{time}", now.ToString("HHmmss"));
     }
 
-    private List<ITransformationStep> BuildTransformationSteps(DatasetConfiguration config)
+    private List<ITransformationStep> BuildTransformationSteps(DatasetConfiguration config, string executionId)
     {
         var transformationSteps = new List<ITransformationStep>();
         
         if (config.Transformations?.Any() != true)
         {
-            _logger.LogInformation("No transformations configured for dataset: {DatasetId}", 
-                config.DatasetId);
+            _logger.LogInformation("No transformations configured for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
+                config.DatasetId, executionId);
             return transformationSteps;
         }
 
-        _logger.LogInformation("Loading {Count} transformation steps for dataset: {DatasetId}", 
+        _logger.LogInformation("Loading {Count} transformation steps for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
             config.Transformations.Count(t => t.Enabled), 
-            config.DatasetId);
+            config.DatasetId, executionId);
 
         foreach (var transformConfig in config.Transformations
             .Where(t => t.Enabled)
@@ -153,20 +163,24 @@ public class DataIngestionJob : IJob
                     transformConfig.Type,
                     transformConfig.Config);
                 
+                // Set environments from configuration
+                step.Environments = transformConfig.Environments ?? new List<string>();
+                
                 transformationSteps.Add(step);
                 
                 _logger.LogDebug(
-                    "Loaded transformation step: {Type} (order: {Order}) for dataset: {DatasetId}", 
+                    "Loaded transformation step: {Type} (order: {Order}, environments: [{Environments}]) for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
                     transformConfig.Type, 
                     transformConfig.Order,
-                    config.DatasetId);
+                    step.Environments.Count > 0 ? string.Join(", ", step.Environments) : "ALL",
+                    config.DatasetId, executionId);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, 
-                    "Failed to create transformation step '{Type}' for dataset: {DatasetId}", 
+                    "Failed to create transformation step '{Type}' for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
                     transformConfig.Type, 
-                    config.DatasetId);
+                    config.DatasetId, executionId);
                 throw;
             }
         }

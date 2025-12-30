@@ -1341,6 +1341,217 @@ public class DateFormatStep : ITransformationStep
 4. Reference it in dataset JSON using the class name (minus "Step" suffix)
 5. No code changes to factory or DI registration required!
 
+### Environment-Based Transformation Execution
+
+The service supports **environment-aware transformations**, allowing you to execute specific transformation steps only in certain environments (Development, Staging, Production, DR).
+
+**How It Works:**
+
+1. **Environment Detection**: The service uses `IHostEnvironment.EnvironmentName` to detect the current runtime environment
+2. **Configuration**: Each transformation step can specify an `environments` array in the dataset configuration
+3. **Filtering**: The `TransformationEngine` checks each step's environment list before execution
+4. **Execution Logic**:
+   - If `environments` is **empty or null** → Execute in **ALL environments** (default behavior)
+   - If `environments` contains specific values → Execute **only in those environments**
+   - Environment names are compared **case-insensitively**
+
+**Environment Names:**
+
+The service recognizes these standard environment names:
+
+| Environment | Constant | Typical Use Case |
+|-------------|----------|------------------|
+| `Development` | `EnvironmentNames.Development` | Local development and testing |
+| `Staging` | `EnvironmentNames.Staging` | Pre-production validation |
+| `Production` | `EnvironmentNames.Production` | Live production workloads |
+| `DR` | `EnvironmentNames.DR` | Disaster recovery environment |
+
+**Configuration Example:**
+
+```json
+{
+  "datasetId": "customer-pii-data",
+  "transformations": [
+    {
+      "type": "DataCleansing",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "trimWhitespace": true,
+        "removeEmptyStrings": true
+      }
+      // No "environments" property = runs in ALL environments
+    },
+    {
+      "type": "DataMasking",
+      "enabled": true,
+      "order": 2,
+      "environments": ["Development", "Staging"],
+      "config": {
+        "maskColumns": ["SSN", "CreditCardNumber", "Email"],
+        "maskingPattern": "***-**-####"
+      }
+      // Only runs in Development and Staging
+    },
+    {
+      "type": "DataValidation",
+      "enabled": true,
+      "order": 3,
+      "environments": ["Production"],
+      "config": {
+        "requiredColumns": ["CustomerId", "SSN"],
+        "strictMode": true,
+        "validateEmail": true
+      }
+      // Only runs in Production
+    },
+    {
+      "type": "DataEncryption",
+      "enabled": true,
+      "order": 4,
+      "environments": ["Production", "DR"],
+      "config": {
+        "encryptColumns": ["SSN", "CreditCardNumber"],
+        "algorithm": "AES256"
+      }
+      // Only runs in Production and DR
+    }
+  ]
+}
+```
+
+**Use Cases:**
+
+| Scenario | Solution |
+|----------|----------|
+| **Data Masking in Non-Prod** | Add masking transformation with `"environments": ["Development", "Staging"]` to protect sensitive data during testing |
+| **Strict Validation in Prod** | Add validation step with `"environments": ["Production"]` to enforce data quality only in production |
+| **Performance Testing** | Skip expensive transformations in development by adding `"environments": ["Production"]` |
+| **Compliance Requirements** | Add encryption/audit transformations with `"environments": ["Production", "DR"]` |
+| **Debug Transformations** | Add logging/debugging steps with `"environments": ["Development"]` for troubleshooting |
+
+**Execution Logs:**
+
+The service logs transformation execution decisions:
+
+```log
+[INF] Loading 4 transformation steps for dataset: customer-pii-data, ExecutionId: customer-pii-data.20251230153045-a3f8b2c1
+[DBG] Loaded transformation step: DataCleansing (order: 1, environments: [ALL]) for dataset: customer-pii-data, ExecutionId: customer-pii-data.20251230153045-a3f8b2c1
+[DBG] Loaded transformation step: DataMasking (order: 2, environments: [Development, Staging]) for dataset: customer-pii-data, ExecutionId: customer-pii-data.20251230153045-a3f8b2c1
+[DBG] Loaded transformation step: DataValidation (order: 3, environments: [Production]) for dataset: customer-pii-data, ExecutionId: customer-pii-data.20251230153045-a3f8b2c1
+[DBG] Loaded transformation step: DataEncryption (order: 4, environments: [Production, DR]) for dataset: customer-pii-data, ExecutionId: customer-pii-data.20251230153045-a3f8b2c1
+
+# Running in Development environment:
+[INF] Applying transformation: DataCleansing
+[INF] Applying transformation: DataMasking (PII data masked for non-production)
+[INF] Skipping transformation 'DataValidation' - not configured for environment: Development
+[INF] Skipping transformation 'DataEncryption' - not configured for environment: Development
+
+# Running in Production environment:
+[INF] Applying transformation: DataCleansing
+[INF] Skipping transformation 'DataMasking' - not configured for environment: Production
+[INF] Applying transformation: DataValidation (Strict mode enabled)
+[INF] Applying transformation: DataEncryption (Encrypted 2 columns)
+```
+
+**Implementation Notes:**
+
+- **Default Behavior**: Omitting the `environments` property (or setting it to `null` or `[]`) makes the step run in **all environments**
+- **Backward Compatibility**: Existing dataset configurations without `environments` property continue to work unchanged
+- **Case-Insensitive**: `"development"`, `"Development"`, and `"DEVELOPMENT"` are treated as identical
+- **Order Preservation**: Skipped transformations don't affect the execution order of remaining steps
+- **Environment Configuration**: Set the environment using:
+  - Environment variable: `ASPNETCORE_ENVIRONMENT=Production`
+  - Launch settings: `"ASPNETCORE_ENVIRONMENT": "Production"`
+  - appsettings file: Loaded automatically (e.g., `appsettings.Production.json`)
+
+**Creating Environment-Aware Custom Steps:**
+
+When creating custom transformation steps, simply implement `ITransformationStep` - the `Environments` property is part of the interface:
+
+```csharp
+public class DataMaskingStep : ITransformationStep
+{
+    private readonly ILogger<DataMaskingStep> _logger;
+    private readonly Dictionary<string, object> _config;
+
+    public DataMaskingStep(
+        ILogger<DataMaskingStep> logger,
+        Dictionary<string, object>? config = null)
+    {
+        _logger = logger;
+        _config = config ?? new Dictionary<string, object>();
+    }
+
+    public string Name => "DataMasking";
+    
+    // The Environments property is set by DataIngestionJob from the dataset configuration
+    public List<string> Environments { get; set; } = new();
+
+    public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
+    {
+        // Your transformation logic here
+        // The TransformationEngine will check Environments before calling this method
+        
+        _logger.LogInformation("Masking PII data for non-production environment");
+        
+        // Mask sensitive columns
+        var maskColumns = GetConfigValue<string[]>("maskColumns", Array.Empty<string>());
+        foreach (DataRow row in data.Rows)
+        {
+            foreach (var column in maskColumns)
+            {
+                if (data.Columns.Contains(column) && row[column] != DBNull.Value)
+                {
+                    row[column] = "***MASKED***";
+                }
+            }
+        }
+        
+        return Task.FromResult(data);
+    }
+
+    private T GetConfigValue<T>(string key, T defaultValue)
+    {
+        // Helper method to extract config values
+        if (!_config.TryGetValue(key, out var value))
+            return defaultValue;
+
+        try
+        {
+            if (value is T typedValue)
+                return typedValue;
+                
+            if (value is System.Text.Json.JsonElement jsonElement)
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<T>(jsonElement.GetRawText())
+                    ?? defaultValue;
+            }
+                
+            return (T)Convert.ChangeType(value, typeof(T));
+        }
+        catch
+        {
+            return defaultValue;
+        }
+    }
+}
+```
+
+**Best Practices:**
+
+✅ **DO:**
+- Use environment-specific transformations to protect sensitive data in non-production
+- Apply strict validation only in production to catch data quality issues
+- Add debugging transformations in development for troubleshooting
+- Omit the `environments` property for transformations that should always run (data cleansing, basic validation)
+
+❌ **DON'T:**
+- Use environment filtering as a substitute for proper data security controls
+- Create transformations that have side effects dependent on environment (use configuration instead)
+- Rely on environment names outside the standard list (Development, Staging, Production, DR)
+- Mix business logic with environment-specific behavior unnecessarily
+
 ## Deployment
 
 ### Windows Service

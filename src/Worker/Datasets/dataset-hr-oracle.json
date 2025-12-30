@@ -22,6 +22,7 @@
     {
       "type": "DataCleansing",
       "enabled": true,
+      "environments": ["Development", "Staging", "Production"],
       "order": 1,
       "config": {
         "trimWhitespace": true,
@@ -31,6 +32,7 @@
     {
       "type": "DataValidation",
       "enabled": true,
+      "environments": ["Development","Staging", "Production"],
       "order": 2,
       "config": {
         "requiredColumns": ["EMPLOYEE_ID", "EMAIL", "HIRE_DATE"],

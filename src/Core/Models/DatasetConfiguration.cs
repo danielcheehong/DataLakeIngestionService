@@ -36,6 +36,14 @@ public class TransformationConfiguration
     public string Type { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
     public int Order { get; set; }
+    
+    /// <summary>
+    /// List of environments where this transformation should execute.
+    /// Empty or null list means execute in ALL environments.
+    /// Valid values: "Development", "Staging", "Production", "DR"
+    /// </summary>
+    public List<string> Environments { get; set; } = new();
+    
     public Dictionary<string, object> Config { get; set; } = new();
 }
 

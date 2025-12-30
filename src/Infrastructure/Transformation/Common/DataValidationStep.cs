@@ -18,6 +18,8 @@ public class DataValidationStep : ITransformationStep
     }
 
     public string Name => "DataValidation";
+    
+    public List<string> Environments { get; set; } = new();
 
     public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
     {

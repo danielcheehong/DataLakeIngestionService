@@ -26,11 +26,12 @@ public class DataPipeline
 
     public async Task<PipelineExecutionResult> ExecuteAsync(
         Dictionary<string, object> metadata,
+        string jobId,
         CancellationToken cancellationToken = default)
     {
         var context = new PipelineContext
         {
-            JobId = Guid.NewGuid().ToString(),
+            JobId = jobId,
             StartTime = DateTime.UtcNow,
             Metadata = metadata,
             CancellationToken = cancellationToken

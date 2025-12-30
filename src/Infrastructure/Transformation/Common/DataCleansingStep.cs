@@ -18,6 +18,8 @@ public class DataCleansingStep : ITransformationStep
     }
 
     public string Name => "DataCleansing";
+    
+    public List<string> Environments { get; set; } = new();
 
     public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
     {
