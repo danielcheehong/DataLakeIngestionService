@@ -79,9 +79,35 @@ public class DataIngestionJob : IJob
                 context.CancellationToken);
 
             // Build query from configuration
-            var query = config.Source.ExtractionType == Core.Enums.ExtractionType.Package
-                ? $"{config.Source.PackageName}.{config.Source.ProcedureName}"
-                : config.Source.ProcedureName;
+            string query;
+            if (config.Source.ExtractionType == Core.Enums.ExtractionType.Query)
+            {
+                // Read SQL from file in Datasets/SqlFiles folder
+                var sqlFilePath = Path.Combine(
+                    AppContext.BaseDirectory, 
+                    "Datasets", 
+                    "SqlFiles", 
+                    config.Source.SqlFilePath);
+                
+                if (!File.Exists(sqlFilePath))
+                {
+                    _logger.LogError("SQL file not found: {SqlFilePath}, ExecutionId: {ExecutionId}", 
+                        sqlFilePath, executionId);
+                    throw new FileNotFoundException($"SQL file not found: {sqlFilePath}");
+                }
+                
+                query = await File.ReadAllTextAsync(sqlFilePath, context.CancellationToken);
+                _logger.LogDebug("Loaded SQL query from file: {SqlFilePath}, ExecutionId: {ExecutionId}", 
+                    config.Source.SqlFilePath, executionId);
+            }
+            else if (config.Source.ExtractionType == Core.Enums.ExtractionType.Package)
+            {
+                query = $"{config.Source.PackageName}.{config.Source.ProcedureName}";
+            }
+            else
+            {
+                query = config.Source.ProcedureName;
+            }
 
             // Generate file name from pattern
             var fileName = GenerateFileName(config.Parquet.FileNamePattern);

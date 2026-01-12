@@ -44,10 +44,18 @@ public class SqlServerDataSource : IDataSource
                 }
             }
 
+            // Detect if query is raw SQL or stored procedure name
+            var isRawSql = IsRawSqlQuery(query);
+            var commandType = isRawSql ? CommandType.Text : CommandType.StoredProcedure;
+            
+            _logger.LogDebug("Executing SQL Server {CommandType}: {Query}", 
+                commandType, 
+                isRawSql ? query.Substring(0, Math.Min(100, query.Length)) + "..." : query);
+
             var reader = await connection.ExecuteReaderAsync(
                 query,
                 dynamicParams,
-                commandType: CommandType.StoredProcedure,
+                commandType: commandType,
                 commandTimeout: 600);
 
             var dataTable = new DataTable();
@@ -62,6 +70,24 @@ public class SqlServerDataSource : IDataSource
             _logger.LogError(ex, "Failed to extract data from SQL Server");
             throw new ExtractionException($"SQL Server extraction failed: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Determines if the query is raw SQL or a stored procedure name
+    /// </summary>
+    private static bool IsRawSqlQuery(string query)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+            return false;
+        
+        var trimmed = query.TrimStart().ToUpperInvariant();
+        return trimmed.StartsWith("SELECT") || 
+               trimmed.StartsWith("WITH") || 
+               trimmed.StartsWith("EXEC ") ||
+               trimmed.StartsWith("EXECUTE ") ||
+               trimmed.StartsWith("INSERT") ||
+               trimmed.StartsWith("UPDATE") ||
+               trimmed.StartsWith("DELETE");
     }
 
     /// <summary>

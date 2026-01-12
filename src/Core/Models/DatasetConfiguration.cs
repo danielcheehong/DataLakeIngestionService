@@ -25,6 +25,10 @@ public class SourceConfiguration
     public ExtractionType ExtractionType { get; set; }
     public string ProcedureName { get; set; } = string.Empty;
     public string PackageName { get; set; } = string.Empty;
+    /// <summary>
+    /// SQL file name (relative to Datasets/SqlFiles folder) for Query extraction type.
+    /// </summary>
+    public string SqlFilePath { get; set; } = string.Empty;
     public Dictionary<string, object> Parameters { get; set; } = new();
     public bool UseRefCursor { get; set; }
     public string RefCursorName { get; set; } = "p_cursor";

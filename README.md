@@ -873,8 +873,9 @@ Each dataset is defined in a JSON file in the `Datasets/` directory:
     "type": "SqlServer",                      // SqlServer | Oracle
     "connectionStringKey": "ConnectionName",  // Key from appsettings.json
     "extractionType": "StoredProcedure",      // StoredProcedure | Package | Query
-    "procedureName": "dbo.sp_GetData",        // Stored procedure name
+    "procedureName": "dbo.sp_GetData",        // Stored procedure name (StoredProcedure/Package)
     "packageName": "PKG_DATA",                // Oracle package (if type=Package)
+    "sqlFilePath": "GetData.sql",             // SQL file in SqlFiles folder (if type=Query)
     "parameters": {                           // Input parameters
       "ParamName": "ParamValue"
     },
@@ -968,6 +969,61 @@ END PKG_SALES;
   }
 }
 ```
+
+### SQL File Query Support
+
+For testing or simple queries, the service supports executing raw SQL statements from files instead of stored procedures or packages.
+
+**Setup:**
+
+1. Create a SQL file in `src/Worker/Datasets/SqlFiles/` folder
+2. Configure dataset with `extractionType: "Query"` and reference the file via `sqlFilePath`
+
+**SQL File Example** (`Datasets/SqlFiles/GetDailyTrades.sql`):
+```sql
+SELECT 
+    TradeId,
+    TradeDate,
+    Symbol,
+    Quantity,
+    Price,
+    TotalAmount
+FROM dbo.Trades
+WHERE TradeDate BETWEEN @StartDate AND @EndDate
+ORDER BY TradeDate DESC
+```
+
+**Dataset Configuration:**
+```json
+{
+  "source": {
+    "type": "SqlServer",
+    "connectionStringKey": "TradesSqlServer",
+    "extractionType": "Query",
+    "sqlFilePath": "GetDailyTrades.sql",
+    "parameters": {
+      "StartDate": "2024-01-01",
+      "EndDate": "2025-12-31"
+    },
+    "commandTimeout": 300
+  }
+}
+```
+
+**Parameter Placeholders:**
+
+| Database | Placeholder Syntax | Example |
+|----------|-------------------|--------|
+| SQL Server | `@ParamName` | `@StartDate` |
+| Oracle | `:ParamName` | `:start_date` |
+
+**Extraction Types Summary:**
+
+| Type | Use Case | Required Properties |
+|------|----------|---------------------|
+| `StoredProcedure` | SQL Server stored procedure | `procedureName` |
+| `Package` | Oracle package procedure | `packageName`, `procedureName` |
+| `Query` | Raw SQL from file | `sqlFilePath` |
 
 ### Cross-Platform Paths
 
@@ -1091,6 +1147,8 @@ DataLakeIngestionService/
 │       ├── Services/
 │       │   └── JobSchedulingService.cs         # Job scheduler
 │       ├── Datasets/                           # Dataset configs
+│       │   └── SqlFiles/                       # Raw SQL query files
+│       │       └── GetDailyTrades.sql          # Example SQL file
 │       ├── Program.cs                          # Entry point
 │       └── appsettings.json                    # Configuration
 │

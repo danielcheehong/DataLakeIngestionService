@@ -1,0 +1,51 @@
+{
+  "datasetId": "trades-daily-query",
+  "name": "Daily Trades via SQL Query",
+  "description": "Extract daily trades data using raw SQL query file (for testing)",
+  "enabled": false,
+  "cronExpression": "0 */2 * * * ?",
+
+  "source": {
+    "type": "SqlServer",
+    "connectionStringKey": "TradesSqlServer",
+    "extractionType": "Query",
+    "sqlFilePath": "GetDailyTrades.sql",
+    "parameters": {
+      "StartDate": "2024-01-01",
+      "EndDate": "2025-12-31"
+    },
+    "commandTimeout": 300
+  },
+
+  "transformations": [],
+
+  "parquet": {
+    "fileNamePattern": "trades_query_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "compressionCodec": "Snappy",
+    "rowGroupSize": 10000,
+    "enableStatistics": true
+  },
+
+  "upload": {
+    "provider": "FileSystem",
+    "fileSystemConfig": {
+      "basePath": "",
+      "relativePath": "Trades/QueryTest/"
+    },
+    "overwriteExisting": false,
+    "enableRetry": true,
+    "maxRetries": 3
+  },
+
+  "notifications": {
+    "onSuccess": false,
+    "onFailure": true,
+    "channels": ["email"]
+  },
+
+  "metadata": {
+    "owner": "Trades Team",
+    "contact": "trades-team@company.com",
+    "tags": ["trades", "daily", "query", "test"]
+  }
+}
