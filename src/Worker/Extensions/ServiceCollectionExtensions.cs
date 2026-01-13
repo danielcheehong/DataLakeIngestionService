@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ExtractionHandler>();
         services.AddScoped<TransformationHandler>();
         services.AddScoped<ParquetGenerationHandler>();
+        services.AddScoped<CtlGenerationHandler>();
         services.AddScoped<UploadHandler>();
 
         // Register Data Pipeline for DataIngestionJob.
@@ -40,9 +41,10 @@ public static class ServiceCollectionExtensions
             var extractionHandler = sp.GetRequiredService<ExtractionHandler>();
             var transformationHandler = sp.GetRequiredService<TransformationHandler>();
             var parquetHandler = sp.GetRequiredService<ParquetGenerationHandler>();
+            var ctlHandler = sp.GetRequiredService<CtlGenerationHandler>();
             var uploadHandler = sp.GetRequiredService<UploadHandler>();
 
-            return new DataPipeline(logger, extractionHandler, transformationHandler, parquetHandler, uploadHandler);
+            return new DataPipeline(logger, extractionHandler, transformationHandler, parquetHandler, ctlHandler, uploadHandler);
         });
         
 
@@ -51,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ITransformationStepFactory, TransformationStepFactory>();
         services.AddScoped<ITransformationEngine, TransformationEngine>();
         services.AddScoped<IParquetWriter, ParquetWriterService>();
+        services.AddScoped<ICtlWriter, CtlWriterService>();
         services.AddScoped<IUploadProviderFactory, UploadProviderFactory>();
 
         // Register HttpClient for vault services

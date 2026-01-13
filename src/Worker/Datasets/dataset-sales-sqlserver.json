@@ -2,7 +2,7 @@
   "datasetId": "Trades-daily-sqlserver",
   "name": "Daily Trades Transactions",
   "description": "Extract daily Trades data from SQL Server",
-  "enabled": false,
+  "enabled": true,
   "cronExpression": "0 */2 * * * ?",
 
   "source": {

@@ -67,6 +67,16 @@ public class UploadConfiguration
     public bool OverwriteExisting { get; set; }
     public bool EnableRetry { get; set; } = true;
     public int MaxRetries { get; set; } = 3;
+    
+    /// <summary>
+    /// When true, keeps a local copy of Parquet and CTL files after uploading to remote destination.
+    /// </summary>
+    public bool KeepLocalCopy { get; set; } = false;
+    
+    /// <summary>
+    /// Local directory path where copies of uploaded files will be stored when KeepLocalCopy is true.
+    /// </summary>
+    public string LocalCopyPath { get; set; } = string.Empty;
 }
 
 public class FileSystemConfig

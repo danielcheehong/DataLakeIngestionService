@@ -12,15 +12,17 @@ public class DataPipeline
         IPipelineHandler extractionHandler,
         IPipelineHandler transformationHandler,
         IPipelineHandler parquetHandler,
+        IPipelineHandler ctlHandler,
         IPipelineHandler uploadHandler)
     {
         _logger = logger;
 
-        // Build the chain: Extraction → Transformation → Parquet → Upload
+        // Build the chain: Extraction → Transformation → Parquet → CTL → Upload
         _firstHandler = extractionHandler;
         extractionHandler
             .SetNext(transformationHandler)
             ?.SetNext(parquetHandler)
+            ?.SetNext(ctlHandler)
             ?.SetNext(uploadHandler);
     }
 

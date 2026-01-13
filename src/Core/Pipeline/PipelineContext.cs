@@ -10,6 +10,8 @@ public interface IPipelineContext
     IDictionary<string, object> Metadata { get; }
     DataTable? ExtractedData { get; set; }
     byte[]? ParquetData { get; set; }
+    byte[]? CtlData { get; set; }
+    string? CtlFileName { get; set; }
     string? UploadUri { get; set; }
     bool HasErrors { get; }
     List<PipelineError> Errors { get; }
@@ -23,6 +25,8 @@ public class PipelineContext : IPipelineContext
     public IDictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
     public DataTable? ExtractedData { get; set; }
     public byte[]? ParquetData { get; set; }
+    public byte[]? CtlData { get; set; }
+    public string? CtlFileName { get; set; }
     public string? UploadUri { get; set; }
     public bool HasErrors => Errors.Any();
     public List<PipelineError> Errors { get; set; } = new();

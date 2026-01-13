@@ -2,7 +2,7 @@
   "datasetId": "hr-employees-oracle",
   "name": "HR Employee Data",
   "description": "Extract employee data from Oracle HR database",
-  "enabled": false,
+  "enabled": true,
   "cronExpression": "0 */1 * * * ?",
 
   "source": {
@@ -56,7 +56,9 @@
     },
     "overwriteExisting": false,
     "enableRetry": true,
-    "maxRetries": 3
+    "maxRetries": 3,
+    "keepLocalCopy": true,
+    "localCopyPath": "C:\\DataLake\\LocalArchive\\hr-employees"
   },
 
   "notifications": {

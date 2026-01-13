@@ -55,6 +55,8 @@ public class DataIngestionJob : IJob
                 return;
             }
 
+            // Extra layer of protection to avoid running disabled datasets. It is expected that the JobSchedulingService
+            // does not schedule jobs for disabled datasets.
             if (!config.Enabled)
             {
                 _logger.LogInformation("Dataset is disabled: {DatasetId}, ExecutionId: {ExecutionId}", 
@@ -127,7 +129,9 @@ public class DataIngestionJob : IJob
                 ["TransformationSteps"] = transformationSteps,
                 ["UploadProvider"] = config.Upload.Provider.ToString(),
                 ["DestinationPath"] = config.Upload.FileSystemConfig?.RelativePath ?? config.Upload.AzureBlobConfig?.BlobPath ?? "",
-                ["FileName"] = fileName
+                ["FileName"] = fileName,
+                ["KeepLocalCopy"] = config.Upload.KeepLocalCopy,
+                ["LocalCopyPath"] = config.Upload.LocalCopyPath ?? string.Empty
             };
 
             // Execute pipeline with execution ID as JobId
