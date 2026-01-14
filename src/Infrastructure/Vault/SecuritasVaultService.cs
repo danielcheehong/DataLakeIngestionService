@@ -1,4 +1,3 @@
-using System;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using DataLakeIngestionService.Core.Interfaces.Vault;
@@ -7,12 +6,17 @@ using Microsoft.Extensions.Logging;
 
 namespace DataLakeIngestionService.Infrastructure.Vault;
 
+/// <summary>
+/// Vault service that retrieves secrets from Securitas vault.
+/// Supports both bearer token and client certificate (mTLS) authentication.
+/// </summary>
 public class SecuritasVaultService : IVaultService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<SecuritasVaultService> _logger;
     private readonly string _baseUrl;
-    private readonly string _authToken;
+    private readonly string? _authToken;
+    private readonly bool _useBearerToken;
 
     public string ProviderName => "Securitas";
 
@@ -23,12 +27,33 @@ public class SecuritasVaultService : IVaultService
     {
         _httpClient = httpClient;
         _logger = logger;
-        
-        _baseUrl = configuration["VaultConfiguration:BaseUrl"] 
+
+        _baseUrl = configuration["VaultConfiguration:BaseUrl"]
             ?? throw new InvalidOperationException("Vault BaseUrl not configured");
-        
-        _authToken = configuration["VaultConfiguration:AuthToken"] 
-            ?? throw new InvalidOperationException("Vault AuthToken not configured");
+
+        // Certificate auth may be used alone or with bearer token
+        var useCertAuth = configuration.GetValue<bool>("VaultConfiguration:UseCertificateAuth");
+        _useBearerToken = configuration.GetValue<bool>("VaultConfiguration:UseBearerTokenWithCertificate", true);
+
+        // Auth token is optional when using certificate-only auth
+        _authToken = configuration["VaultConfiguration:AuthToken"];
+
+        if (!useCertAuth && string.IsNullOrWhiteSpace(_authToken))
+        {
+            throw new InvalidOperationException(
+                "Vault AuthToken must be configured when UseCertificateAuth is false");
+        }
+
+        if (useCertAuth)
+        {
+            _logger.LogInformation(
+                "SecuritasVaultService configured with certificate authentication. BearerToken={UseBearerToken}",
+                _useBearerToken && !string.IsNullOrWhiteSpace(_authToken));
+        }
+        else
+        {
+            _logger.LogInformation("SecuritasVaultService configured with bearer token authentication");
+        }
     }
 
     public async Task<string> GetSecretAsync(string secretPath, CancellationToken cancellationToken = default)
@@ -40,7 +65,15 @@ public class SecuritasVaultService : IVaultService
             var requestUrl = $"{_baseUrl}/v1/secret/data/{secretPath}";
 
             var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _authToken);
+
+            // Add bearer token if configured
+            if (_useBearerToken && !string.IsNullOrWhiteSpace(_authToken))
+            {
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _authToken);
+            }
+
+            // Note: Client certificate is automatically attached by HttpClientHandler
+            // configured in DI registration
 
             var response = await _httpClient.SendAsync(request, cancellationToken);
             response.EnsureSuccessStatusCode();
@@ -62,6 +95,14 @@ public class SecuritasVaultService : IVaultService
 
             _logger.LogInformation("Successfully retrieved secret from Securitas vault");
             return secret;
+        }
+        catch (HttpRequestException ex) when (ex.Message.Contains("SSL") || ex.Message.Contains("certificate"))
+        {
+            _logger.LogError(ex,
+                "Certificate authentication failed for Securitas vault. " +
+                "Verify the client certificate is valid and trusted by the vault server. Path: {Path}",
+                secretPath);
+            throw;
         }
         catch (Exception ex)
         {
