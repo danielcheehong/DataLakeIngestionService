@@ -1,6 +1,7 @@
 using System.Data;
 using System.Text.Json;
 using Dapper;
+using DataLakeIngestionService.Core.Enums;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using Microsoft.Data.SqlClient;
@@ -20,6 +21,7 @@ public class SqlServerDataSource : IDataSource
     public async Task<DataTable> ExtractAsync(
         string connectionString,
         string query,
+        ExtractionType extractionType,
         Dictionary<string, object>? parameters,
         CancellationToken cancellationToken)
     {
@@ -44,13 +46,13 @@ public class SqlServerDataSource : IDataSource
                 }
             }
 
-            // Detect if query is raw SQL or stored procedure name
-            var isRawSql = IsRawSqlQuery(query);
-            var commandType = isRawSql ? CommandType.Text : CommandType.StoredProcedure;
+            // Map ExtractionType to CommandType
+            var commandType = GetCommandType(extractionType);
             
-            _logger.LogDebug("Executing SQL Server {CommandType}: {Query}", 
-                commandType, 
-                isRawSql ? query.Substring(0, Math.Min(100, query.Length)) + "..." : query);
+            _logger.LogDebug("Executing SQL Server {CommandType} (ExtractionType: {ExtractionType}): {Query}", 
+                commandType,
+                extractionType,
+                commandType == CommandType.Text ? query.Substring(0, Math.Min(100, query.Length)) + "..." : query);
 
             var reader = await connection.ExecuteReaderAsync(
                 query,
@@ -73,21 +75,17 @@ public class SqlServerDataSource : IDataSource
     }
 
     /// <summary>
-    /// Determines if the query is raw SQL or a stored procedure name
+    /// Maps ExtractionType to SQL Server CommandType
     /// </summary>
-    private static bool IsRawSqlQuery(string query)
+    private static CommandType GetCommandType(ExtractionType extractionType)
     {
-        if (string.IsNullOrWhiteSpace(query))
-            return false;
-        
-        var trimmed = query.TrimStart().ToUpperInvariant();
-        return trimmed.StartsWith("SELECT") || 
-               trimmed.StartsWith("WITH") || 
-               trimmed.StartsWith("EXEC ") ||
-               trimmed.StartsWith("EXECUTE ") ||
-               trimmed.StartsWith("INSERT") ||
-               trimmed.StartsWith("UPDATE") ||
-               trimmed.StartsWith("DELETE");
+        return extractionType switch
+        {
+            ExtractionType.Query => CommandType.Text,
+            ExtractionType.StoredProcedure => CommandType.StoredProcedure,
+            ExtractionType.Package => CommandType.StoredProcedure,  // SQL Server doesn't have packages, treat as stored proc
+            _ => throw new ArgumentException($"Unsupported extraction type: {extractionType}", nameof(extractionType))
+        };
     }
 
     /// <summary>

@@ -1,4 +1,5 @@
 using System.Data;
+using DataLakeIngestionService.Core.Enums;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using Microsoft.Extensions.Logging;
@@ -19,6 +20,7 @@ public class OracleDataSource : IDataSource
     public async Task<DataTable> ExtractAsync(
         string connectionString,
         string query,
+        ExtractionType extractionType,
         Dictionary<string, object>? parameters,
         CancellationToken cancellationToken)
     {
@@ -27,15 +29,23 @@ public class OracleDataSource : IDataSource
             using var connection = new OracleConnection(connectionString);
             await connection.OpenAsync(cancellationToken);
 
-            // Check if query is a package call
-            if (query.Contains("."))
+            _logger.LogInformation("Executing Oracle {ExtractionType}: {Query}", 
+                extractionType, 
+                extractionType == ExtractionType.Query ? query.Substring(0, Math.Min(100, query.Length)) + "..." : query);
+            
+            return extractionType switch
             {
-                return await ExecutePackageProcedureAsync(connection, query, parameters, cancellationToken);
-            }
-            else
-            {
-                return await ExecuteQueryAsync(connection, query, parameters, cancellationToken);
-            }
+                ExtractionType.Query => 
+                    await ExecuteQueryAsync(connection, query, parameters, cancellationToken),
+                
+                ExtractionType.Package => 
+                    await ExecutePackageProcedureAsync(connection, query, parameters, cancellationToken),
+                
+                ExtractionType.StoredProcedure => 
+                    await ExecuteStoredProcedureAsync(connection, query, parameters, cancellationToken),
+                
+                _ => throw new ArgumentException($"Unsupported extraction type: {extractionType}", nameof(extractionType))
+            };
         }
         catch (OracleException ex)
         {
@@ -127,6 +137,71 @@ public class OracleDataSource : IDataSource
             
             _logger.LogInformation("Successfully retrieved {RowCount} rows from Oracle procedure {Procedure}", 
                 dataTable.Rows.Count, packageProcedure);
+        }
+        else
+        {
+            throw new ExtractionException(
+                $"Expected OracleRefCursor but got {cursorParam.Value?.GetType().Name ?? "null"}");
+        }
+
+        return dataTable;
+    }
+
+    private async Task<DataTable> ExecuteStoredProcedureAsync(
+        OracleConnection connection,
+        string procedureName,
+        Dictionary<string, object>? parameters,
+        CancellationToken cancellationToken)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandType = CommandType.StoredProcedure;
+        command.CommandText = procedureName;
+        command.CommandTimeout = _cmdTimeout;
+
+        _logger.LogInformation("Executing Oracle stored procedure: {Procedure}", procedureName);
+
+        // Add input parameters
+        if (parameters != null && parameters.Count > 0)
+        {
+            foreach (var param in parameters)
+            {
+                var paramName = param.Key.TrimStart(':');
+                var oracleParam = new OracleParameter
+                {
+                    ParameterName = paramName,
+                    Value = param.Value ?? DBNull.Value,
+                    Direction = ParameterDirection.Input
+                };
+                command.Parameters.Add(oracleParam);
+
+                _logger.LogDebug("Added input parameter: {Name} = {Value}", paramName, param.Value);
+            }
+        }
+
+        // Add output REF CURSOR parameter
+        var cursorParam = new OracleParameter
+        {
+            ParameterName = "p_cursor",
+            OracleDbType = OracleDbType.RefCursor,
+            Direction = ParameterDirection.Output
+        };
+        command.Parameters.Add(cursorParam);
+
+        _logger.LogDebug("Added output cursor parameter: p_cursor");
+
+        // Execute
+        await command.ExecuteNonQueryAsync(cancellationToken);
+
+        // Read data from REF CURSOR
+        var dataTable = new DataTable();
+        
+        if (cursorParam.Value is Oracle.ManagedDataAccess.Types.OracleRefCursor refCursor)
+        {
+            using var reader = refCursor.GetDataReader();
+            dataTable.Load(reader);
+            
+            _logger.LogInformation("Successfully retrieved {RowCount} rows from Oracle procedure {Procedure}", 
+                dataTable.Rows.Count, procedureName);
         }
         else
         {

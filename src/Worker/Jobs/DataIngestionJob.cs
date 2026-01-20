@@ -123,6 +123,7 @@ public class DataIngestionJob : IJob
                 ["DatasetId"] = datasetId!,
                 ["ExecutionId"] = executionId,
                 ["SourceType"] = config.Source.Type.ToString(),
+                ["ExtractionType"] = config.Source.ExtractionType,
                 ["ConnectionString"] = connectionString,
                 ["Query"] = query,
                 ["Parameters"] = config.Source.Parameters,

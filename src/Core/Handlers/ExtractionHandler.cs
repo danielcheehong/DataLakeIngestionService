@@ -28,6 +28,9 @@ public class ExtractionHandler : BasePipelineHandler
         {
             // Get configuration from context metadata
             var sourceType = context.Metadata["SourceType"]?.ToString() ?? throw new ExtractionException("SourceType not found in metadata");
+            var extractionType = context.Metadata.TryGetValue("ExtractionType", out var et) && et != null
+                ? (ExtractionType)et
+                : throw new ExtractionException("ExtractionType not found in metadata");
             var connectionString = context.Metadata["ConnectionString"]?.ToString() ?? throw new ExtractionException("ConnectionString not found in metadata");
             var query = context.Metadata["Query"]?.ToString() ?? throw new ExtractionException("Query not found in metadata");
             var parameters = context.Metadata.TryGetValue("Parameters", out var p) 
@@ -41,6 +44,7 @@ public class ExtractionHandler : BasePipelineHandler
             context.ExtractedData = await dataSource.ExtractAsync(
                 connectionString,
                 query,
+                extractionType,
                 parameters,
                 context.CancellationToken);
 
