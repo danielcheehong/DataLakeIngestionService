@@ -240,6 +240,26 @@ public class ParquetWriterService : IParquetWriter
             }
             return result;
         }
+        else if (targetType == typeof(short))
+        {
+            var result = new short[rowCount];
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = dataTable.Rows[i][column];
+                result[i] = value == DBNull.Value ? (short)0 : Convert.ToInt16(value);
+            }
+            return result;
+        }
+        else if (targetType == typeof(byte))
+        {
+            var result = new byte[rowCount];
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = dataTable.Rows[i][column];
+                result[i] = value == DBNull.Value ? (byte)0 : Convert.ToByte(value);
+            }
+            return result;
+        }
         else if (targetType == typeof(DateTime))
         {
             var result = new DateTime[rowCount];
