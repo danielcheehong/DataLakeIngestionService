@@ -8,19 +8,25 @@ public class UploadProviderFactory : IUploadProviderFactory
 {
     private readonly ILogger<FileSystemUploadProvider> _fileSystemLogger;
     private readonly ILogger<AzureBlobStorageProvider> _azureLogger;
+    private readonly ILogger<AxwayUploadProvider> _axwayLogger;
     private readonly FileSystemOptions _fileSystemOptions;
     private readonly AzureBlobOptions _azureOptions;
+    private readonly AxwayOptions _axwayOptions;
 
     public UploadProviderFactory(
         ILogger<FileSystemUploadProvider> fileSystemLogger,
         ILogger<AzureBlobStorageProvider> azureLogger,
+        ILogger<AxwayUploadProvider> axwayLogger,
         FileSystemOptions fileSystemOptions,
-        AzureBlobOptions azureOptions)
+        AzureBlobOptions azureOptions,
+        AxwayOptions axwayOptions)
     {
         _fileSystemLogger = fileSystemLogger;
         _azureLogger = azureLogger;
+        _axwayLogger = axwayLogger;
         _fileSystemOptions = fileSystemOptions;
         _azureOptions = azureOptions;
+        _axwayOptions = axwayOptions;
     }
 
     public IUploadProvider Create(string providerType)
@@ -29,6 +35,7 @@ public class UploadProviderFactory : IUploadProviderFactory
         {
             "filesystem" => new FileSystemUploadProvider(_fileSystemLogger, _fileSystemOptions),
             "azureblob" => new AzureBlobStorageProvider(_azureLogger, _azureOptions),
+            "axway" => new AxwayUploadProvider(_axwayLogger, _axwayOptions),
             _ => throw new ArgumentException($"Unsupported upload provider: {providerType}", nameof(providerType))
         };
     }
