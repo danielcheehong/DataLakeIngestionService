@@ -147,6 +147,18 @@ public static class ServiceCollectionExtensions
             ContainerName = configuration.GetValue<string>("AzureBlob:DefaultContainer") ?? "raw-data"
         });
 
+        services.AddSingleton(new AxwayOptions
+        {
+            Host = configuration.GetValue<string>("Axway:Host") ?? string.Empty,
+            Port = configuration.GetValue<int>("Axway:Port", 22),
+            Username = configuration.GetValue<string>("Axway:Username") ?? string.Empty,
+            PrivateKeyPath = configuration.GetValue<string>("Axway:PrivateKeyPath") ?? string.Empty,
+            PrivateKeyPassphrase = configuration.GetValue<string>("Axway:PrivateKeyPassphrase") ?? string.Empty,
+            BasePath = configuration.GetValue<string>("Axway:BasePath") ?? "/",
+            ConnectionTimeoutSeconds = configuration.GetValue<int>("Axway:ConnectionTimeoutSeconds", 30),
+            MaxRetries = configuration.GetValue<int>("Axway:MaxRetries", 3)
+        });
+
         // Register Quartz.NET
         services.AddQuartz(q =>
         {

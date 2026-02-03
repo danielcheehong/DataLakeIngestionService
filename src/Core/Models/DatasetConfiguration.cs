@@ -64,6 +64,7 @@ public class UploadConfiguration
     public UploadProviderType Provider { get; set; }
     public FileSystemConfig? FileSystemConfig { get; set; }
     public AzureBlobConfig? AzureBlobConfig { get; set; }
+    public AxwayConfig? AxwayConfig { get; set; }
     public bool OverwriteExisting { get; set; }
     public bool EnableRetry { get; set; } = true;
     public int MaxRetries { get; set; } = 3;
@@ -89,6 +90,11 @@ public class AzureBlobConfig
 {
     public string ContainerName { get; set; } = string.Empty;
     public string BlobPath { get; set; } = string.Empty;
+}
+
+public class AxwayConfig
+{
+    public string DestinationPath { get; set; } = string.Empty;
 }
 
 public class NotificationConfiguration
