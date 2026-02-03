@@ -8,12 +8,158 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
 - **Chain of Responsibility Pipeline**: Modular extraction → transformation → Parquet generation → upload pipeline
 - **Dynamic Transformation Discovery**: Auto-discovers transformation steps via reflection at startup
 - **Scheduled Execution**: Quartz.NET with cron expressions for flexible scheduling
+- **REST API**: Built-in Minimal API for managing jobs and scheduler at runtime
 - **Cross-Platform**: Runs on Windows (as Windows Service) and Linux (as systemd daemon)
 - **Multiple Upload Targets**: FileSystem, Azure Blob Storage (AWS S3 and Axway ready for implementation)
 - **Parquet Generation**: Columnar storage with Snappy compression
 - **Independent Task Execution**: Each dataset runs as an independent Quartz job with concurrent execution control
 - **Dapper Integration**: Lightweight ORM for efficient data extraction
 - **Structured Logging**: Serilog with console and file outputs
+
+## REST API
+
+The service exposes a REST API for managing Quartz scheduled jobs at runtime. By default, the API listens on `http://localhost:5080`.
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/jobs` | List all scheduled jobs with status and next fire time |
+| `GET` | `/api/scheduler/status` | Get current scheduler status (running, standby, job count) |
+| `POST` | `/api/jobs/{datasetId}/trigger` | Trigger an existing job to run immediately |
+| `POST` | `/api/jobs?triggerImmediately=true` | Add a new job from JSON body and optionally trigger it |
+| `DELETE` | `/api/jobs/{datasetId}` | Remove a scheduled job |
+| `POST` | `/api/scheduler/pause` | Pause (suspend) all scheduled jobs |
+| `POST` | `/api/scheduler/resume` | Resume all paused jobs |
+| `POST` | `/api/scheduler/reschedule` | Reload all dataset configs and reschedule jobs |
+| `GET` | `/health` | Health check endpoint |
+
+### Swagger UI
+
+In Development mode, Swagger UI is available at: `http://localhost:5080/swagger`
+
+### API Examples
+
+**List all scheduled jobs:**
+```bash
+curl http://localhost:5080/api/jobs
+```
+
+**Response:**
+```json
+[
+  {
+    "jobName": "trades-daily-sqlserver",
+    "groupName": "DataIngestion",
+    "datasetId": "trades-daily-sqlserver",
+    "cronExpression": "0 */2 * * * ?",
+    "nextFireTime": "2026-02-02T15:02:00+00:00",
+    "previousFireTime": "2026-02-02T15:00:00+00:00",
+    "state": "Normal"
+  }
+]
+```
+
+**Trigger a job immediately:**
+```bash
+curl -X POST http://localhost:5080/api/jobs/trades-daily-sqlserver/trigger
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Job for dataset 'trades-daily-sqlserver' triggered successfully.",
+  "datasetId": "trades-daily-sqlserver",
+  "triggeredAt": "2026-02-02T15:05:30+00:00"
+}
+```
+
+**Add and trigger a new job:**
+```bash
+curl -X POST "http://localhost:5080/api/jobs?triggerImmediately=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "datasetId": "adhoc-export",
+    "name": "Ad-hoc Data Export",
+    "enabled": true,
+    "cronExpression": "0 0 6 * * ?",
+    "source": {
+      "type": "SqlServer",
+      "connectionStringKey": "TradesSqlServer",
+      "extractionType": "StoredProcedure",
+      "procedureName": "dbo.sp_GetDailyTrades",
+      "parameters": { "StartDate": "2024-01-01", "EndDate": "2024-12-31" }
+    },
+    "parquet": { "fileNamePattern": "adhoc_{date:yyyyMMdd}.parquet" },
+    "upload": { "provider": "FileSystem", "fileSystemConfig": { "relativePath": "AdHoc/" } }
+  }'
+```
+
+**Pause all jobs:**
+```bash
+curl -X POST http://localhost:5080/api/scheduler/pause
+```
+
+**Resume all jobs:**
+```bash
+curl -X POST http://localhost:5080/api/scheduler/resume
+```
+
+**Remove a job:**
+```bash
+curl -X DELETE http://localhost:5080/api/jobs/trades-daily-sqlserver
+```
+
+**Reschedule all jobs from configuration files:**
+```bash
+curl -X POST http://localhost:5080/api/scheduler/reschedule
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Successfully rescheduled 3 jobs.",
+  "jobsScheduled": 3,
+  "scheduledDatasets": ["trades-daily-sqlserver", "hr-employees-oracle", "inventory-sync"],
+  "failedDatasets": []
+}
+```
+
+### API Configuration
+
+Configure the API port in `appsettings.json`:
+
+```json
+{
+  "Kestrel": {
+    "Endpoints": {
+      "Http": {
+        "Url": "http://localhost:5080"
+      }
+    }
+  }
+}
+```
+
+For production with HTTPS:
+
+```json
+{
+  "Kestrel": {
+    "Endpoints": {
+      "Https": {
+        "Url": "https://localhost:5443",
+        "Certificate": {
+          "Path": "/path/to/certificate.pfx",
+          "Password": "certificate-password"
+        }
+      }
+    }
+  }
+}
+```
 
 ## Architecture
 
@@ -99,6 +245,7 @@ PipelineContext (Job Metadata)
 | Quartz.NET | 3.8.0 | Job scheduling |
 | Parquet.Net | 4.18.1 | Parquet file generation |
 | Serilog | 3.1.1 | Structured logging |
+| Swashbuckle | 6.5.0 | OpenAPI / Swagger UI |
 | Oracle.ManagedDataAccess.Core | 3.21.130 | Oracle connectivity |
 | Microsoft.Data.SqlClient | 5.1.5 | SQL Server connectivity |
 | Azure.Storage.Blobs | 12.19.1 | Azure Blob Storage |
