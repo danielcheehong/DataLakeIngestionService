@@ -13,7 +13,10 @@
     "procedureName": "GET_EMPLOYEE_DATA",
     "parameters": {
       "p_department_id": "0",
-      "p_active_only": "Y"
+      "p_active_only": "Y",
+      "p_ref_date": "${today}",
+      "p_start_date": "${today-30}",
+      "p_end_date": "${today}"
     },
     "commandTimeout": 600
   },

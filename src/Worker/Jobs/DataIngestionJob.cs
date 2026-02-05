@@ -1,3 +1,4 @@
+using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Interfaces.Services;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Models;
@@ -14,6 +15,7 @@ public class DataIngestionJob : IJob
     private readonly IDatasetConfigurationService _configService;
     private readonly ITransformationStepFactory _transformationStepFactory;
     private readonly IConnectionStringBuilder _connectionStringBuilder;
+    private readonly IParameterResolverService _parameterResolver;
     private readonly DataPipeline _pipeline;
     private readonly IConfiguration _configuration;
 
@@ -22,6 +24,7 @@ public class DataIngestionJob : IJob
         IDatasetConfigurationService configService,
         ITransformationStepFactory transformationStepFactory,
         IConnectionStringBuilder connectionStringBuilder,
+        IParameterResolverService parameterResolver,
         DataPipeline pipeline,
         IConfiguration configuration)
     {
@@ -29,6 +32,7 @@ public class DataIngestionJob : IJob
         _configService = configService;
         _transformationStepFactory = transformationStepFactory;
         _connectionStringBuilder = connectionStringBuilder;
+        _parameterResolver = parameterResolver;
         _pipeline = pipeline;
         _configuration = configuration;
     }
@@ -117,6 +121,22 @@ public class DataIngestionJob : IJob
             // Build transformation steps from dataset configuration
             var transformationSteps = BuildTransformationSteps(config, executionId);
 
+            // Resolve runtime parameters (e.g., ${today}, ${env:VAR})
+            var resolutionContext = new ParameterResolutionContext
+            {
+                DatasetId = datasetId!,
+                ExecutionTime = DateTime.UtcNow,
+                Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+            };
+
+            var resolvedParameters = await _parameterResolver.ResolveAsync(
+                config.Source.Parameters,
+                resolutionContext,
+                context.CancellationToken);
+
+            _logger.LogDebug("Resolved {Count} parameters for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
+                resolvedParameters.Count, datasetId, executionId);
+
             // Build pipeline metadata
             var metadata = new Dictionary<string, object>
             {
@@ -126,7 +146,7 @@ public class DataIngestionJob : IJob
                 ["ExtractionType"] = config.Source.ExtractionType,
                 ["ConnectionString"] = connectionString,
                 ["Query"] = query,
-                ["Parameters"] = config.Source.Parameters,
+                ["Parameters"] = resolvedParameters,
                 ["TransformationSteps"] = transformationSteps,
                 ["UploadProvider"] = config.Upload.Provider.ToString(),
                 ["DestinationPath"] = config.Upload.FileSystemConfig?.RelativePath ?? config.Upload.AzureBlobConfig?.BlobPath ?? "",

@@ -1023,8 +1023,11 @@ Each dataset is defined in a JSON file in the `Datasets/` directory:
     "procedureName": "dbo.sp_GetData",        // Stored procedure name (StoredProcedure/Package)
     "packageName": "PKG_DATA",                // Oracle package (if type=Package)
     "sqlFilePath": "GetData.sql",             // SQL file in SqlFiles folder (if type=Query)
-    "parameters": {                           // Input parameters
-      "ParamName": "ParamValue"
+    "parameters": {                           // Input parameters (supports runtime placeholders)
+      "ParamName": "ParamValue",
+      "RefDate": "${today}",                  // Resolved to today's date at runtime
+      "StartDate": "${today-30}",             // Resolved to 30 days ago
+      "Environment": "${env:ASPNETCORE_ENVIRONMENT}"  // Resolved from environment variable
     },
     "commandTimeout": 300                     // Timeout in seconds
   },
@@ -1110,11 +1113,107 @@ END PKG_SALES;
     "packageName": "PKG_SALES",
     "procedureName": "GET_DAILY_SALES",
     "parameters": {
-      "p_start_date": "2024-01-01",
-      "p_end_date": "2024-12-31"
+      "p_start_date": "${today-30}",
+      "p_end_date": "${today}"
     }
   }
 }
+```
+
+### Runtime Parameter Resolution
+
+The service supports **dynamic parameter values** that are resolved at execution time. Instead of hardcoding dates or configuration values in JSON files, use placeholder expressions that are evaluated when the job runs.
+
+#### Placeholder Syntax
+
+Use the `${expression}` syntax in parameter values:
+
+| Placeholder | Description | Example Output |
+|-------------|-------------|----------------|
+| `${today}` | Today's date (yyyy-MM-dd) | `2026-02-05` |
+| `${today-N}` | N days ago | `${today-1}` → `2026-02-04` |
+| `${today+N}` | N days in future | `${today+7}` → `2026-02-12` |
+| `${today-Nd}` | N days ago (explicit) | `${today-30d}` → 30 days ago |
+| `${today-Nw}` | N weeks ago | `${today-1w}` → 7 days ago |
+| `${today-Nm}` | N months ago | `${today-1m}` → 1 month ago |
+| `${today:format}` | Today with custom format | `${today:yyyyMMdd}` → `20260205` |
+| `${now}` | Current datetime (yyyy-MM-dd HH:mm:ss) | `2026-02-05 14:30:00` |
+| `${now-Nh}` | N hours ago | `${now-24h}` → 24 hours ago |
+| `${now-Nm}` | N minutes ago | `${now-30m}` → 30 minutes ago |
+| `${now:format}` | Current datetime with format | `${now:HHmmss}` → `143000` |
+| `${env:VAR_NAME}` | Environment variable value | `${env:ASPNETCORE_ENVIRONMENT}` → `Production` |
+
+#### Example Configuration
+
+```json
+{
+  "datasetId": "daily-sales-report",
+  "source": {
+    "type": "Oracle",
+    "connectionStringKey": "SalesOracleDB",
+    "extractionType": "Package",
+    "packageName": "SALES_PKG",
+    "procedureName": "GET_DAILY_SALES",
+    "parameters": {
+      "p_report_date": "${today}",
+      "p_start_date": "${today-7}",
+      "p_end_date": "${today}",
+      "p_as_of_date": "${today:yyyyMMdd}",
+      "p_environment": "${env:ASPNETCORE_ENVIRONMENT}",
+      "p_static_value": "ACTIVE"
+    }
+  }
+}
+```
+
+When this job executes on February 5, 2026, the parameters resolve to:
+
+| Parameter | Placeholder | Resolved Value |
+|-----------|-------------|----------------|
+| `p_report_date` | `${today}` | `2026-02-05` |
+| `p_start_date` | `${today-7}` | `2026-01-29` |
+| `p_end_date` | `${today}` | `2026-02-05` |
+| `p_as_of_date` | `${today:yyyyMMdd}` | `20260205` |
+| `p_environment` | `${env:ASPNETCORE_ENVIRONMENT}` | `Production` |
+| `p_static_value` | `ACTIVE` | `ACTIVE` (no change) |
+
+#### Null Parameter Defaults
+
+Parameters with null values and date-related names are automatically defaulted to today's date:
+
+```json
+{
+  "parameters": {
+    "p_ref_date": null,        // Resolves to today's date
+    "p_as_of_date": null,      // Resolves to today's date
+    "p_other_param": null      // Resolves to DBNull (no default)
+  }
+}
+```
+
+Parameter names containing `date`, `refdate`, or `asof` receive the default date behavior.
+
+#### Embedded Placeholders
+
+Placeholders can be embedded within larger strings:
+
+```json
+{
+  "parameters": {
+    "p_file_path": "/data/reports/${today:yyyy}/${today:MM}/",
+    "p_report_name": "sales_report_${today:yyyyMMdd}.csv"
+  }
+}
+```
+
+#### Logging and Debugging
+
+When parameters are resolved, the service logs the transformation:
+
+```log
+[DBG] Resolved parameter 'p_start_date': '${today-7}' → '2026-01-29'
+[DBG] Resolved parameter 'p_end_date': '${today}' → '2026-02-05'
+[DBG] Resolved 6 parameters for dataset: daily-sales-report, ExecutionId: daily-sales-report.20260205143000-a1b2c3d4
 ```
 
 ### SQL File Query Support
