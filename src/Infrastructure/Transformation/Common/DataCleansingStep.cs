@@ -1,5 +1,6 @@
 using System.Data;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
+using DataLakeIngestionService.Core.Pipeline;
 using Microsoft.Extensions.Logging;
 
 namespace DataLakeIngestionService.Infrastructure.Transformation.Common;
@@ -21,7 +22,7 @@ public class DataCleansingStep : ITransformationStep
     
     public List<string> Environments { get; set; } = new();
 
-    public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
+    public Task TransformAsync(IPipelineContext context, CancellationToken cancellationToken)
     {
         var trimWhitespace = GetConfigValue("trimWhitespace", true);
         var removeEmptyStrings = GetConfigValue("removeEmptyStrings", false);
@@ -30,6 +31,34 @@ public class DataCleansingStep : ITransformationStep
             "Applying data cleansing (trimWhitespace={Trim}, removeEmptyStrings={RemoveEmpty})", 
             trimWhitespace, removeEmptyStrings);
 
+        var totalRows = 0;
+
+        // Process ExtractedData if available (single source or already consolidated)
+        if (context.ExtractedData != null)
+        {
+            CleanseDataTable(context.ExtractedData, trimWhitespace, removeEmptyStrings, cancellationToken);
+            totalRows += context.ExtractedData.Rows.Count;
+        }
+
+        // Process each table in ExtractedDataSets (multi-source)
+        foreach (var kvp in context.ExtractedDataSets)
+        {
+            _logger.LogDebug("Cleansing data table for source '{SourceId}'", kvp.Key);
+            CleanseDataTable(kvp.Value, trimWhitespace, removeEmptyStrings, cancellationToken);
+            totalRows += kvp.Value.Rows.Count;
+        }
+
+        _logger.LogInformation("Data cleansing completed. Processed {RowCount} total rows", totalRows);
+
+        return Task.CompletedTask;
+    }
+
+    private void CleanseDataTable(
+        DataTable data, 
+        bool trimWhitespace, 
+        bool removeEmptyStrings,
+        CancellationToken cancellationToken)
+    {
         foreach (DataRow row in data.Rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -56,10 +85,6 @@ public class DataCleansingStep : ITransformationStep
                 }
             }
         }
-
-        _logger.LogInformation("Data cleansing completed. Processed {RowCount} rows", data.Rows.Count);
-
-        return Task.FromResult(data);
     }
 
     private T GetConfigValue<T>(string key, T defaultValue)

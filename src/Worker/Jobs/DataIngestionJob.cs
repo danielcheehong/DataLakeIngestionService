@@ -68,102 +68,43 @@ public class DataIngestionJob : IJob
                 return;
             }
 
-            // Get connection string template from configuration (not required for DotNet sources)
-            var connectionString = string.Empty;
-            if (config.Source.Type != Core.Enums.DataSourceType.DotNet)
-            {
-                var connectionStringTemplate = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
-
-                if (string.IsNullOrEmpty(connectionStringTemplate))
-                {
-                    _logger.LogError("Connection string not found: {Key}, ExecutionId: {ExecutionId}", 
-                        config.Source.ConnectionStringKey, executionId);
-                    throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
-                }
-
-                // Build connection string with vault password resolution.
-                connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
-                    connectionStringTemplate, 
-                    context.CancellationToken);
-            }
-
-            // Build query from configuration
-            string query;
-            if (config.Source.ExtractionType == Core.Enums.ExtractionType.Query)
-            {
-                // Read SQL from file in Datasets/SqlFiles folder
-                var sqlFilePath = Path.Combine(
-                    AppContext.BaseDirectory, 
-                    "Datasets", 
-                    "SqlFiles", 
-                    config.Source.SqlFilePath);
-                
-                if (!File.Exists(sqlFilePath))
-                {
-                    _logger.LogError("SQL file not found: {SqlFilePath}, ExecutionId: {ExecutionId}", 
-                        sqlFilePath, executionId);
-                    throw new FileNotFoundException($"SQL file not found: {sqlFilePath}");
-                }
-                
-                query = await File.ReadAllTextAsync(sqlFilePath, context.CancellationToken);
-                _logger.LogDebug("Loaded SQL query from file: {SqlFilePath}, ExecutionId: {ExecutionId}", 
-                    config.Source.SqlFilePath, executionId);
-            }
-            else if (config.Source.ExtractionType == Core.Enums.ExtractionType.Package)
-            {
-                query = $"{config.Source.PackageName}.{config.Source.ProcedureName}";
-            }
-            else if (config.Source.ExtractionType == Core.Enums.ExtractionType.CodeGenerator)
-            {
-                // For DotNet sources, the query is the provider name
-                query = config.Source.ProviderName;
-                _logger.LogDebug("Using DotNet provider: {ProviderName}, ExecutionId: {ExecutionId}", 
-                    query, executionId);
-            }
-            else
-            {
-                query = config.Source.ProcedureName;
-            }
-
             // Generate file name from pattern
             var fileName = GenerateFileName(config.Parquet.FileNamePattern);
 
             // Build transformation steps from dataset configuration
             var transformationSteps = BuildTransformationSteps(config, executionId);
 
-            // Resolve runtime parameters (e.g., ${today}, ${env:VAR})
-            var resolutionContext = new ParameterResolutionContext
+            // Build pipeline metadata based on single or multi-source configuration
+            Dictionary<string, object> metadata;
+
+            if (config.HasMultipleSources)
             {
-                DatasetId = datasetId!,
-                ExecutionTime = DateTime.UtcNow,
-                Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
-            };
-
-            var resolvedParameters = await _parameterResolver.ResolveAsync(
-                config.Source.Parameters,
-                resolutionContext,
-                context.CancellationToken);
-
-            _logger.LogDebug("Resolved {Count} parameters for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
-                resolvedParameters.Count, datasetId, executionId);
-
-            // Build pipeline metadata
-            var metadata = new Dictionary<string, object>
+                // Multi-source: build source configurations list
+                var sourceConfigs = await BuildSourceConfigurationsAsync(config, context.CancellationToken);
+                
+                metadata = new Dictionary<string, object>
+                {
+                    ["DatasetId"] = datasetId!,
+                    ["ExecutionId"] = executionId,
+                    ["SourceConfigurations"] = sourceConfigs,
+                    ["TransformationSteps"] = transformationSteps,
+                    ["UploadProvider"] = config.Upload.Provider.ToString(),
+                    ["DestinationPath"] = config.Upload.FileSystemConfig?.RelativePath 
+                                          ?? config.Upload.AzureBlobConfig?.BlobPath ?? "",
+                    ["FileName"] = fileName,
+                    ["KeepLocalCopy"] = config.Upload.KeepLocalCopy,
+                    ["LocalCopyPath"] = config.Upload.LocalCopyPath ?? string.Empty
+                };
+                
+                _logger.LogInformation(
+                    "Built metadata for multi-source dataset with {SourceCount} sources: {DatasetId}, ExecutionId: {ExecutionId}",
+                    sourceConfigs.Count, datasetId, executionId);
+            }
+            else
             {
-                ["DatasetId"] = datasetId!,
-                ["ExecutionId"] = executionId,
-                ["SourceType"] = config.Source.Type.ToString(),
-                ["ExtractionType"] = config.Source.ExtractionType,
-                ["ConnectionString"] = connectionString,
-                ["Query"] = query,
-                ["Parameters"] = resolvedParameters,
-                ["TransformationSteps"] = transformationSteps,
-                ["UploadProvider"] = config.Upload.Provider.ToString(),
-                ["DestinationPath"] = config.Upload.FileSystemConfig?.RelativePath ?? config.Upload.AzureBlobConfig?.BlobPath ?? "",
-                ["FileName"] = fileName,
-                ["KeepLocalCopy"] = config.Upload.KeepLocalCopy,
-                ["LocalCopyPath"] = config.Upload.LocalCopyPath ?? string.Empty
-            };
+                // Single source: existing logic (backward compatibility)
+                metadata = await BuildSingleSourceMetadataAsync(config, datasetId!, executionId, fileName, transformationSteps, context.CancellationToken);
+            }
 
             // Execute pipeline with execution ID as JobId
             var result = await _pipeline.ExecuteAsync(metadata, executionId, context.CancellationToken);
@@ -187,6 +128,173 @@ public class DataIngestionJob : IJob
                 datasetId, executionId);
             throw new JobExecutionException(ex, refireImmediately: false);
         }
+    }
+
+    private async Task<Dictionary<string, object>> BuildSingleSourceMetadataAsync(
+        DatasetConfiguration config,
+        string datasetId,
+        string executionId,
+        string fileName,
+        List<ITransformationStep> transformationSteps,
+        CancellationToken cancellationToken)
+    {
+        // Get connection string template from configuration (not required for DotNet sources)
+        var connectionString = string.Empty;
+        if (config.Source.Type != Core.Enums.DataSourceType.DotNet)
+        {
+            var connectionStringTemplate = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
+
+            if (string.IsNullOrEmpty(connectionStringTemplate))
+            {
+                _logger.LogError("Connection string not found: {Key}, ExecutionId: {ExecutionId}", 
+                    config.Source.ConnectionStringKey, executionId);
+                throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
+            }
+
+            // Build connection string with vault password resolution.
+            connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
+                connectionStringTemplate, 
+                cancellationToken);
+        }
+
+        // Build query from configuration
+        var query = await BuildQueryAsync(config.Source, executionId, cancellationToken);
+
+        // Resolve runtime parameters (e.g., ${today}, ${env:VAR})
+        var resolutionContext = new ParameterResolutionContext
+        {
+            DatasetId = datasetId,
+            ExecutionTime = DateTime.UtcNow,
+            Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+        };
+
+        var resolvedParameters = await _parameterResolver.ResolveAsync(
+            config.Source.Parameters,
+            resolutionContext,
+            cancellationToken);
+
+        _logger.LogDebug("Resolved {Count} parameters for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
+            resolvedParameters.Count, datasetId, executionId);
+
+        return new Dictionary<string, object>
+        {
+            ["DatasetId"] = datasetId,
+            ["ExecutionId"] = executionId,
+            ["SourceType"] = config.Source.Type.ToString(),
+            ["ExtractionType"] = config.Source.ExtractionType,
+            ["ConnectionString"] = connectionString,
+            ["Query"] = query,
+            ["Parameters"] = resolvedParameters,
+            ["TransformationSteps"] = transformationSteps,
+            ["UploadProvider"] = config.Upload.Provider.ToString(),
+            ["DestinationPath"] = config.Upload.FileSystemConfig?.RelativePath ?? config.Upload.AzureBlobConfig?.BlobPath ?? "",
+            ["FileName"] = fileName,
+            ["KeepLocalCopy"] = config.Upload.KeepLocalCopy,
+            ["LocalCopyPath"] = config.Upload.LocalCopyPath ?? string.Empty
+        };
+    }
+
+    private async Task<List<SourceExtractionConfig>> BuildSourceConfigurationsAsync(
+        DatasetConfiguration config,
+        CancellationToken cancellationToken)
+    {
+        var sourceConfigs = new List<SourceExtractionConfig>();
+
+        foreach (var source in config.Sources!)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrEmpty(source.SourceId))
+            {
+                throw new InvalidOperationException(
+                    $"SourceId is required for multi-source datasets. Dataset: {config.DatasetId}");
+            }
+
+            // Get connection string (not required for DotNet sources)
+            var connectionString = string.Empty;
+            if (source.Type != Core.Enums.DataSourceType.DotNet)
+            {
+                var connectionStringTemplate = _configuration.GetConnectionString(source.ConnectionStringKey);
+                if (string.IsNullOrEmpty(connectionStringTemplate))
+                {
+                    throw new InvalidOperationException(
+                        $"Connection string not found: {source.ConnectionStringKey} for source: {source.SourceId}");
+                }
+                connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
+                    connectionStringTemplate, cancellationToken);
+            }
+
+            // Build query
+            var query = await BuildQueryAsync(source, $"{config.DatasetId}.{source.SourceId}", cancellationToken);
+
+            // Resolve parameters
+            var resolutionContext = new ParameterResolutionContext
+            {
+                DatasetId = config.DatasetId,
+                ExecutionTime = DateTime.UtcNow,
+                Environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+            };
+            var resolvedParameters = await _parameterResolver.ResolveAsync(
+                source.Parameters, resolutionContext, cancellationToken);
+
+            sourceConfigs.Add(new SourceExtractionConfig
+            {
+                SourceId = source.SourceId,
+                SourceType = source.Type.ToString(),
+                ExtractionType = source.ExtractionType,
+                ConnectionString = connectionString,
+                Query = query,
+                Parameters = resolvedParameters
+            });
+
+            _logger.LogDebug(
+                "Built source config for '{SourceId}' ({SourceType}), Dataset: {DatasetId}",
+                source.SourceId, source.Type, config.DatasetId);
+        }
+
+        return sourceConfigs;
+    }
+
+    private async Task<string> BuildQueryAsync(SourceConfiguration source, string logContext, CancellationToken cancellationToken)
+    {
+        string query;
+        if (source.ExtractionType == Core.Enums.ExtractionType.Query)
+        {
+            // Read SQL from file in Datasets/SqlFiles folder
+            var sqlFilePath = Path.Combine(
+                AppContext.BaseDirectory, 
+                "Datasets", 
+                "SqlFiles", 
+                source.SqlFilePath);
+            
+            if (!File.Exists(sqlFilePath))
+            {
+                _logger.LogError("SQL file not found: {SqlFilePath}, Context: {Context}", 
+                    sqlFilePath, logContext);
+                throw new FileNotFoundException($"SQL file not found: {sqlFilePath}");
+            }
+            
+            query = await File.ReadAllTextAsync(sqlFilePath, cancellationToken);
+            _logger.LogDebug("Loaded SQL query from file: {SqlFilePath}, Context: {Context}", 
+                source.SqlFilePath, logContext);
+        }
+        else if (source.ExtractionType == Core.Enums.ExtractionType.Package)
+        {
+            query = $"{source.PackageName}.{source.ProcedureName}";
+        }
+        else if (source.ExtractionType == Core.Enums.ExtractionType.CodeGenerator)
+        {
+            // For DotNet sources, the query is the provider name
+            query = source.ProviderName;
+            _logger.LogDebug("Using DotNet provider: {ProviderName}, Context: {Context}", 
+                query, logContext);
+        }
+        else
+        {
+            query = source.ProcedureName;
+        }
+
+        return query;
     }
 
     private static string GenerateFileName(string pattern)

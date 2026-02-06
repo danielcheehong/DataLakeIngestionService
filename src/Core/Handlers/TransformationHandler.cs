@@ -22,7 +22,11 @@ public class TransformationHandler : BasePipelineHandler
 
     protected override async Task<PipelineResult> ExecuteAsync(IPipelineContext context)
     {
-        if (context.ExtractedData == null || context.ExtractedData.Rows.Count == 0)
+        // Check if there's any data to transform (single source or multi-source)
+        var hasExtractedData = context.ExtractedData != null && context.ExtractedData.Rows.Count > 0;
+        var hasExtractedDataSets = context.ExtractedDataSets.Count > 0;
+        
+        if (!hasExtractedData && !hasExtractedDataSets)
         {
             Logger.LogWarning("No data to transform");
             return new PipelineResult
@@ -45,6 +49,14 @@ public class TransformationHandler : BasePipelineHandler
             if (transformationSteps == null || !transformationSteps.Any())
             {
                 Logger.LogInformation("No transformation steps configured, skipping transformation");
+                
+                // For multi-source with no transformations, we still need ExtractedData populated
+                if (!hasExtractedData && hasExtractedDataSets)
+                {
+                    throw new TransformationException(
+                        "Multi-source dataset requires transformation steps to consolidate ExtractedDataSets into ExtractedData.");
+                }
+                
                 return new PipelineResult
                 {
                     IsSuccess = true,
@@ -53,30 +65,27 @@ public class TransformationHandler : BasePipelineHandler
                 };
             }
 
-            // Apply transformations
-            var transformedData = await _transformationEngine.ApplyTransformationsAsync(
-                context.ExtractedData,
+            // Apply transformations - engine modifies context directly
+            await _transformationEngine.ApplyTransformationsAsync(
+                context,
                 transformationSteps,
                 context.CancellationToken);
-
-            // Update context with transformed data
-            context.ExtractedData = transformedData;
 
             stopwatch.Stop();
 
             Logger.LogInformation(
-                "Transformed {RowCount} rows in {ElapsedMs}ms",
-                transformedData.Rows.Count,
-                stopwatch.ElapsedMilliseconds);
+                "Transformed data in {ElapsedMs}ms. Final row count: {RowCount}",
+                stopwatch.ElapsedMilliseconds,
+                context.ExtractedData?.Rows.Count ?? 0);
 
             return new PipelineResult
             {
                 IsSuccess = true,
-                Message = $"Transformed {transformedData.Rows.Count} rows",
+                Message = $"Transformed {context.ExtractedData?.Rows.Count ?? 0} rows",
                 ShouldContinue = true,
                 StageMetrics = new Dictionary<string, object>
                 {
-                    ["RowCount"] = transformedData.Rows.Count,
+                    ["RowCount"] = context.ExtractedData?.Rows.Count ?? 0,
                     ["DurationMs"] = stopwatch.ElapsedMilliseconds
                 }
             };

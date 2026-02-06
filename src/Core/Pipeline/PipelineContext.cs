@@ -9,6 +9,13 @@ public interface IPipelineContext
     DateTime StartTime { get; }
     IDictionary<string, object> Metadata { get; }
     DataTable? ExtractedData { get; set; }
+    
+    /// <summary>
+    /// Dictionary of extracted DataTables keyed by source identifier.
+    /// Used for multi-source datasets where each source produces a separate DataTable.
+    /// </summary>
+    IDictionary<string, DataTable> ExtractedDataSets { get; }
+    
     byte[]? ParquetData { get; set; }
     byte[]? CtlData { get; set; }
     string? CtlFileName { get; set; }
@@ -24,6 +31,7 @@ public class PipelineContext : IPipelineContext
     public DateTime StartTime { get; set; } = DateTime.UtcNow;
     public IDictionary<string, object> Metadata { get; set; } = new Dictionary<string, object>();
     public DataTable? ExtractedData { get; set; }
+    public IDictionary<string, DataTable> ExtractedDataSets { get; set; } = new Dictionary<string, DataTable>();
     public byte[]? ParquetData { get; set; }
     public byte[]? CtlData { get; set; }
     public string? CtlFileName { get; set; }
@@ -58,4 +66,17 @@ public class PipelineExecutionResult
     public List<PipelineError> Errors { get; set; } = new();
     public TimeSpan TotalDuration { get; set; }
     public string? UploadUri { get; set; }
+}
+
+/// <summary>
+/// Configuration for a single source extraction, passed via metadata for multi-source datasets.
+/// </summary>
+public class SourceExtractionConfig
+{
+    public string SourceId { get; set; } = string.Empty;
+    public string SourceType { get; set; } = string.Empty;
+    public Core.Enums.ExtractionType ExtractionType { get; set; }
+    public string ConnectionString { get; set; } = string.Empty;
+    public string Query { get; set; } = string.Empty;
+    public Dictionary<string, object> Parameters { get; set; } = new();
 }

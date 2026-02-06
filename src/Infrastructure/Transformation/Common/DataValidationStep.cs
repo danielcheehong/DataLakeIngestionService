@@ -1,5 +1,6 @@
 using System.Data;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
+using DataLakeIngestionService.Core.Pipeline;
 using Microsoft.Extensions.Logging;
 
 namespace DataLakeIngestionService.Infrastructure.Transformation.Common;
@@ -21,32 +22,47 @@ public class DataValidationStep : ITransformationStep
     
     public List<string> Environments { get; set; } = new();
 
-    public Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken)
+    public Task TransformAsync(IPipelineContext context, CancellationToken cancellationToken)
     {
         var requiredColumns = GetConfigValue<string[]>("requiredColumns", Array.Empty<string>());
         var validateEmail = GetConfigValue("validateEmail", false);
         
         _logger.LogInformation("Applying data validation");
 
+        var totalRows = 0;
+
+        // Validate ExtractedData if available
+        if (context.ExtractedData != null)
+        {
+            ValidateDataTable(context.ExtractedData, requiredColumns, "ExtractedData");
+            totalRows += context.ExtractedData.Rows.Count;
+        }
+
+        // Validate each table in ExtractedDataSets
+        foreach (var kvp in context.ExtractedDataSets)
+        {
+            ValidateDataTable(kvp.Value, requiredColumns, kvp.Key);
+            totalRows += kvp.Value.Rows.Count;
+        }
+
+        _logger.LogInformation("Data validation completed. {RowCount} total rows validated", totalRows);
+
+        return Task.CompletedTask;
+    }
+
+    private void ValidateDataTable(DataTable data, string[] requiredColumns, string sourceName)
+    {
         // Validate required columns exist
         foreach (var columnName in requiredColumns)
         {
             if (!data.Columns.Contains(columnName))
             {
                 throw new InvalidOperationException(
-                    $"Required column '{columnName}' not found in dataset");
+                    $"Required column '{columnName}' not found in dataset '{sourceName}'");
             }
         }
 
-        // TODO: Implement additional validation logic
-        // - Email format validation if validateEmail = true
-        // - Data type validation
-        // - Range validation
-        // - Custom business rules
-
-        _logger.LogInformation("Data validation completed. {RowCount} rows validated", data.Rows.Count);
-
-        return Task.FromResult(data);
+        _logger.LogDebug("Validated {RowCount} rows in '{SourceName}'", data.Rows.Count, sourceName);
     }
 
     private T GetConfigValue<T>(string key, T defaultValue)

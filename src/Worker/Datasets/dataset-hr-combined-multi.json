@@ -1,0 +1,102 @@
+{
+  "datasetId": "hr-employees-combined",
+  "name": "HR Employee Combined Data",
+  "description": "Extract and combine employee data from Oracle HR and SQL Server Payroll databases",
+  "enabled": true,
+  "cronExpression": "0 0 6 * * ?",
+
+  "sources": [
+    {
+      "sourceId": "hr-oracle",
+      "type": "Oracle",
+      "connectionStringKey": "HROracleDB",
+      "extractionType": "Package",
+      "packageName": "HR_PKG",
+      "procedureName": "GET_EMPLOYEE_DATA",
+      "parameters": {
+        "p_department_id": "0",
+        "p_active_only": "Y",
+        "p_ref_date": "${today}"
+      },
+      "commandTimeout": 600
+    },
+    {
+      "sourceId": "payroll-sqlserver",
+      "type": "SqlServer",
+      "connectionStringKey": "PayrollDB",
+      "extractionType": "StoredProcedure",
+      "procedureName": "usp_GetPayrollData",
+      "parameters": {
+        "@StartDate": "${today-30}",
+        "@EndDate": "${today}"
+      },
+      "commandTimeout": 300
+    }
+  ],
+
+  "transformations": [
+    {
+      "type": "DataCleansing",
+      "enabled": true,
+      "environments": ["Development", "Staging", "Production"],
+      "order": 1,
+      "config": {
+        "trimWhitespace": true,
+        "removeEmptyStrings": false
+      }
+    },
+    {
+      "type": "DataValidation",
+      "enabled": true,
+      "environments": ["Development", "Staging", "Production"],
+      "order": 2,
+      "config": {
+        "requiredColumns": ["EMPLOYEE_ID"],
+        "validateEmail": false
+      }
+    },
+    {
+      "type": "MergeTables",
+      "enabled": true,
+      "environments": ["Development", "Staging", "Production"],
+      "order": 99,
+      "config": {
+        "mergeType": "InnerJoin",
+        "joinKeys": ["EMPLOYEE_ID"],
+        "sourceTables": ["hr-oracle", "payroll-sqlserver"]
+      }
+    }
+  ],
+
+  "parquet": {
+    "fileNamePattern": "hr_employees_combined_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "compressionCodec": "Snappy",
+    "rowGroupSize": 10000,
+    "enableStatistics": true
+  },
+
+  "upload": {
+    "provider": "FileSystem",
+    "fileSystemConfig": {
+      "basePath": "",
+      "relativePath": "hr/employees-combined/"
+    },
+    "overwriteExisting": false,
+    "enableRetry": true,
+    "maxRetries": 3,
+    "keepLocalCopy": true,
+    "localCopyPath": "C:\\DataLake\\LocalArchive\\hr-employees-combined"
+  },
+
+  "notifications": {
+    "onSuccess": false,
+    "onFailure": true,
+    "channels": ["email"]
+  },
+
+  "metadata": {
+    "owner": "HR Team",
+    "contact": "hr-team@company.com",
+    "tags": ["hr", "employees", "payroll", "multi-source"]
+  }
+}

@@ -10,16 +10,39 @@ public class DatasetConfiguration
     public bool Enabled { get; set; } = true;
     public string CronExpression { get; set; } = "0 0 * * * ?";
     
+    /// <summary>
+    /// Single source configuration. Used for backward compatibility.
+    /// If Sources is populated, this property is ignored.
+    /// </summary>
     public SourceConfiguration Source { get; set; } = new();
+    
+    /// <summary>
+    /// Multiple source configurations for datasets requiring data from multiple datasources.
+    /// When populated, takes precedence over the single Source property.
+    /// Each source must have a unique SourceId.
+    /// </summary>
+    public List<SourceConfiguration>? Sources { get; set; }
+    
     public List<TransformationConfiguration> Transformations { get; set; } = new();
     public ParquetConfiguration Parquet { get; set; } = new();
     public UploadConfiguration Upload { get; set; } = new();
     public NotificationConfiguration Notifications { get; set; } = new();
     public MetadataConfiguration Metadata { get; set; } = new();
+    
+    /// <summary>
+    /// Returns true if this dataset uses multiple sources.
+    /// </summary>
+    public bool HasMultipleSources => Sources != null && Sources.Count > 0;
 }
 
 public class SourceConfiguration
 {
+    /// <summary>
+    /// Unique identifier for this source within the dataset.
+    /// Required when using multiple sources. Used as the key in ExtractedDataSets.
+    /// </summary>
+    public string SourceId { get; set; } = string.Empty;
+    
     public DataSourceType Type { get; set; }
     public string ConnectionStringKey { get; set; } = string.Empty;
     public ExtractionType ExtractionType { get; set; }

@@ -1,5 +1,7 @@
 using System.Data;
+using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
+using DataLakeIngestionService.Core.Pipeline;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -18,12 +20,11 @@ public class TransformationEngine : ITransformationEngine
         _hostEnvironment = hostEnvironment;
     }
 
-    public async Task<DataTable> ApplyTransformationsAsync(
-        DataTable data,
+    public async Task ApplyTransformationsAsync(
+        IPipelineContext context,
         List<ITransformationStep> steps,
         CancellationToken cancellationToken)
     {
-        var transformedData = data.Copy();
         var currentEnvironment = _hostEnvironment.EnvironmentName;
         
         _logger.LogInformation(
@@ -33,6 +34,8 @@ public class TransformationEngine : ITransformationEngine
 
         foreach (var step in steps)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            
             // Check if step should execute in current environment
             if (!ShouldExecuteInEnvironment(step, currentEnvironment))
             {
@@ -46,13 +49,22 @@ public class TransformationEngine : ITransformationEngine
 
             _logger.LogInformation("Applying transformation step: {StepName}", step.Name);
             
-            transformedData = await step.TransformAsync(transformedData, cancellationToken);
+            await step.TransformAsync(context, cancellationToken);
             
-            _logger.LogDebug("Transformation step {StepName} completed. Row count: {RowCount}",
-                step.Name, transformedData.Rows.Count);
+            _logger.LogDebug(
+                "Transformation step {StepName} completed. ExtractedData rows: {RowCount}, ExtractedDataSets count: {DataSetCount}",
+                step.Name, 
+                context.ExtractedData?.Rows.Count ?? 0,
+                context.ExtractedDataSets.Count);
         }
 
-        return transformedData;
+        // Validate that ExtractedData is populated after all transformations
+        if (context.ExtractedData == null)
+        {
+            throw new TransformationException(
+                "ExtractedData must be populated after all transformation steps complete. " +
+                "For multi-source datasets, ensure a merge/consolidation step is configured as the final transformation.");
+        }
     }
 
     private bool ShouldExecuteInEnvironment(ITransformationStep step, string currentEnvironment)

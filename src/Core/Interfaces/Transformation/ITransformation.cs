@@ -1,4 +1,5 @@
 using System.Data;
+using DataLakeIngestionService.Core.Pipeline;
 
 namespace DataLakeIngestionService.Core.Interfaces.Transformation;
 
@@ -12,13 +13,22 @@ public interface ITransformationStep
     /// </summary>
     List<string> Environments { get; set; }
     
-    Task<DataTable> TransformAsync(DataTable data, CancellationToken cancellationToken);
+    /// <summary>
+    /// Transforms data in the pipeline context.
+    /// For single-source datasets: operate on context.ExtractedData.
+    /// For multi-source datasets: access context.ExtractedDataSets and set context.ExtractedData when consolidating.
+    /// </summary>
+    Task TransformAsync(IPipelineContext context, CancellationToken cancellationToken);
 }
 
 public interface ITransformationEngine
 {
-    Task<DataTable> ApplyTransformationsAsync(
-        DataTable data,
+    /// <summary>
+    /// Applies all transformation steps to the pipeline context.
+    /// After completion, context.ExtractedData must be populated.
+    /// </summary>
+    Task ApplyTransformationsAsync(
+        IPipelineContext context,
         List<ITransformationStep> steps,
         CancellationToken cancellationToken);
 }
