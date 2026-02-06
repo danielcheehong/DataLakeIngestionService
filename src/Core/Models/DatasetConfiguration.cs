@@ -29,6 +29,11 @@ public class SourceConfiguration
     /// SQL file name (relative to Datasets/SqlFiles folder) for Query extraction type.
     /// </summary>
     public string SqlFilePath { get; set; } = string.Empty;
+    /// <summary>
+    /// For DotNet source type: the registered provider name to invoke.
+    /// This should match the ProviderName property of a registered IDotNetDataProvider implementation.
+    /// </summary>
+    public string ProviderName { get; set; } = string.Empty;
     public Dictionary<string, object> Parameters { get; set; } = new();
     public bool UseRefCursor { get; set; }
     public string RefCursorName { get; set; } = "p_cursor";

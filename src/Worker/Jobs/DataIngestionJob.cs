@@ -68,21 +68,24 @@ public class DataIngestionJob : IJob
                 return;
             }
 
-            // Get connection string template from configuration
-            var connectionStringTemplate = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
-
-            if (string.IsNullOrEmpty(connectionStringTemplate))
+            // Get connection string template from configuration (not required for DotNet sources)
+            var connectionString = string.Empty;
+            if (config.Source.Type != Core.Enums.DataSourceType.DotNet)
             {
-                _logger.LogError("Connection string not found: {Key}, ExecutionId: {ExecutionId}", 
-                    config.Source.ConnectionStringKey, executionId);
-                throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
-            }
+                var connectionStringTemplate = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
 
-            // Build connection string with vault password resolution.
-            
-            var connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
-                connectionStringTemplate, 
-                context.CancellationToken);
+                if (string.IsNullOrEmpty(connectionStringTemplate))
+                {
+                    _logger.LogError("Connection string not found: {Key}, ExecutionId: {ExecutionId}", 
+                        config.Source.ConnectionStringKey, executionId);
+                    throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
+                }
+
+                // Build connection string with vault password resolution.
+                connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
+                    connectionStringTemplate, 
+                    context.CancellationToken);
+            }
 
             // Build query from configuration
             string query;
@@ -109,6 +112,13 @@ public class DataIngestionJob : IJob
             else if (config.Source.ExtractionType == Core.Enums.ExtractionType.Package)
             {
                 query = $"{config.Source.PackageName}.{config.Source.ProcedureName}";
+            }
+            else if (config.Source.ExtractionType == Core.Enums.ExtractionType.CodeGenerator)
+            {
+                // For DotNet sources, the query is the provider name
+                query = config.Source.ProviderName;
+                _logger.LogDebug("Using DotNet provider: {ProviderName}, ExecutionId: {ExecutionId}", 
+                    query, executionId);
             }
             else
             {

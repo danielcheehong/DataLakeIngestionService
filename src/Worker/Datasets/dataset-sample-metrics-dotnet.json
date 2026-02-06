@@ -1,0 +1,62 @@
+{
+  "datasetId": "sample-metrics-dotnet",
+  "name": "Sample Metrics Data",
+  "description": "Generate sample metrics using C# code-based provider",
+  "enabled": true,
+  "cronExpression": "0 0 6 * * ?",
+
+  "source": {
+    "type": "DotNet",
+    "extractionType": "CodeGenerator",
+    "providerName": "SampleMetrics",
+    "parameters": {
+      "startDate": "${today-7}",
+      "endDate": "${today}"
+    }
+  },
+
+  "transformations": [
+    {
+      "type": "DataCleansing",
+      "enabled": true,
+      "environments": ["Development", "Staging", "Production"],
+      "order": 1,
+      "config": {
+        "trimWhitespace": true,
+        "removeEmptyStrings": false
+      }
+    }
+  ],
+
+  "parquet": {
+    "fileNamePattern": "metrics_{date:yyyyMMdd}_{time:HHmmss}.parquet",
+    "compressionCodec": "Snappy",
+    "rowGroupSize": 10000,
+    "enableStatistics": true
+  },
+
+  "upload": {
+    "provider": "FileSystem",
+    "fileSystemConfig": {
+      "basePath": "",
+      "relativePath": "metrics/sample/"
+    },
+    "overwriteExisting": false,
+    "enableRetry": true,
+    "maxRetries": 3,
+    "keepLocalCopy": true,
+    "localCopyPath": "C:\\DataLake\\LocalArchive\\sample-metrics"
+  },
+
+  "notifications": {
+    "onSuccess": false,
+    "onFailure": true,
+    "channels": ["email"]
+  },
+
+  "metadata": {
+    "owner": "Data Engineering Team",
+    "contact": "data-team@company.com",
+    "tags": ["metrics", "sample", "dotnet"]
+  }
+}

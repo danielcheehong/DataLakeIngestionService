@@ -3,14 +3,16 @@ namespace DataLakeIngestionService.Core.Enums;
 public enum DataSourceType
 {
     SqlServer,
-    Oracle
+    Oracle,
+    DotNet
 }
 
 public enum ExtractionType
 {
     StoredProcedure,
     Package,
-    Query
+    Query,
+    CodeGenerator
 }
 
 public enum UploadProviderType

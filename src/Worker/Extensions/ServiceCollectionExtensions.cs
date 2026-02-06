@@ -54,6 +54,10 @@ public static class ServiceCollectionExtensions
         // Register Infrastructure Services
         services.AddScoped<IDataSourceFactory, DataSourceFactory>();
         services.AddSingleton<IParameterResolverService, ParameterResolverService>();
+        
+        // Register DotNet Data Provider Factory (auto-discovers providers via assembly scanning)
+        services.AddSingleton<IDotNetDataProviderFactory, DotNetDataProviderFactory>();
+        
         services.AddSingleton<ITransformationStepFactory, TransformationStepFactory>();
         services.AddScoped<ITransformationEngine, TransformationEngine>();
         services.AddScoped<IParquetWriter, ParquetWriterService>();
