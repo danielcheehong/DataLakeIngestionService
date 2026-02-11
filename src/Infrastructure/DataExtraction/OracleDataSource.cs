@@ -1,4 +1,5 @@
 using System.Data;
+using System.Text.Json;
 using DataLakeIngestionService.Core.Enums;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
@@ -60,6 +61,107 @@ public class OracleDataSource : IDataSource
         }
     }
 
+    /// <summary>
+    /// Creates an OracleParameter with automatic type inference from the value.
+    /// Handles string-to-native type conversion for dates, numbers, etc.
+    /// </summary>
+    private OracleParameter CreateTypedOracleParameter(string name, object? value, ParameterDirection direction = ParameterDirection.Input)
+    {
+        var param = new OracleParameter
+        {
+            ParameterName = name,
+            Direction = direction
+        };
+
+        // Handle null values
+        if (value == null)
+        {
+            param.Value = DBNull.Value;
+            return param;
+        }
+
+        // Convert JsonElement to native type first
+        var convertedValue = ConvertJsonElement(value);
+        if (convertedValue == null)
+        {
+            param.Value = DBNull.Value;
+            return param;
+        }
+
+        // Handle string values - attempt type inference
+        if (convertedValue is string strValue)
+        {
+            if (int.TryParse(strValue, out int intValue))
+            {
+                param.OracleDbType = OracleDbType.Int32;
+                param.Value = intValue;
+            }
+            else if (long.TryParse(strValue, out long longValue))
+            {
+                param.OracleDbType = OracleDbType.Int64;
+                param.Value = longValue;
+            }
+            else if (decimal.TryParse(strValue, out decimal decimalValue))
+            {
+                param.OracleDbType = OracleDbType.Decimal;
+                param.Value = decimalValue;
+            }
+            else if (DateTime.TryParse(strValue, out DateTime dateValue))
+            {
+                param.OracleDbType = OracleDbType.Date;
+                param.Value = dateValue;
+            }
+            else
+            {
+                param.OracleDbType = OracleDbType.Varchar2;
+                param.Value = strValue;
+            }
+        }
+        // Handle native .NET types
+        else
+        {
+            param.OracleDbType = convertedValue switch
+            {
+                int => OracleDbType.Int32,
+                long => OracleDbType.Int64,
+                decimal => OracleDbType.Decimal,
+                double => OracleDbType.Double,
+                float => OracleDbType.Single,
+                DateTime => OracleDbType.Date,
+                bool => OracleDbType.Byte,
+                byte[] => OracleDbType.Blob,
+                _ => OracleDbType.Varchar2
+            };
+            param.Value = convertedValue is bool b ? (b ? 1 : 0) : convertedValue;
+        }
+
+        return param;
+    }
+
+    /// <summary>
+    /// Converts JsonElement to native .NET type
+    /// </summary>
+    private static object? ConvertJsonElement(object? value)
+    {
+        if (value is JsonElement jsonElement)
+        {
+            return jsonElement.ValueKind switch
+            {
+                JsonValueKind.String => jsonElement.GetString(),
+                JsonValueKind.Number => jsonElement.TryGetInt32(out var intValue) ? intValue :
+                                       jsonElement.TryGetInt64(out var longValue) ? longValue :
+                                       jsonElement.TryGetDecimal(out var decimalValue) ? decimalValue :
+                                       jsonElement.GetDouble(),
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => null,
+                _ => jsonElement.GetRawText()
+            };
+        }
+
+        return value;
+    }
+
     private async Task<DataTable> ExecutePackageProcedureAsync(
         OracleConnection connection,
         string packageProcedure,
@@ -79,16 +181,11 @@ public class OracleDataSource : IDataSource
             foreach (var param in parameters)
             {
                 var paramName = param.Key.TrimStart(':');
-                var oracleParam = new OracleParameter
-                {
-                    ParameterName = paramName,
-                    Value = param.Value ?? DBNull.Value,
-                    Direction = ParameterDirection.Input
-                };
+                var oracleParam = CreateTypedOracleParameter(paramName, param.Value, ParameterDirection.Input);
                 command.Parameters.Add(oracleParam);
 
-                _logger.LogDebug("Added input parameter: {Name} = {Value} (Type: {Type})", 
-                    paramName, param.Value, param.Value?.GetType().Name ?? "null");
+                _logger.LogDebug("Added input parameter: {Name} = {Value} (OracleDbType: {DbType})", 
+                    paramName, oracleParam.Value, oracleParam.OracleDbType);
             }
         }
 
@@ -166,15 +263,11 @@ public class OracleDataSource : IDataSource
             foreach (var param in parameters)
             {
                 var paramName = param.Key.TrimStart(':');
-                var oracleParam = new OracleParameter
-                {
-                    ParameterName = paramName,
-                    Value = param.Value ?? DBNull.Value,
-                    Direction = ParameterDirection.Input
-                };
+                var oracleParam = CreateTypedOracleParameter(paramName, param.Value, ParameterDirection.Input);
                 command.Parameters.Add(oracleParam);
 
-                _logger.LogDebug("Added input parameter: {Name} = {Value}", paramName, param.Value);
+                _logger.LogDebug("Added input parameter: {Name} = {Value} (OracleDbType: {DbType})", 
+                    paramName, oracleParam.Value, oracleParam.OracleDbType);
             }
         }
 
@@ -231,14 +324,11 @@ public class OracleDataSource : IDataSource
             foreach (var param in parameters)
             {
                 var paramName = param.Key.TrimStart(':');
-                var oracleParam = new OracleParameter
-                {
-                    ParameterName = paramName,
-                    Value = param.Value ?? DBNull.Value
-                };
+                var oracleParam = CreateTypedOracleParameter(paramName, param.Value);
                 command.Parameters.Add(oracleParam);
 
-                _logger.LogDebug("Added parameter: {Name} = {Value}", paramName, param.Value);
+                _logger.LogDebug("Added parameter: {Name} = {Value} (OracleDbType: {DbType})", 
+                    paramName, oracleParam.Value, oracleParam.OracleDbType);
             }
         }
 
