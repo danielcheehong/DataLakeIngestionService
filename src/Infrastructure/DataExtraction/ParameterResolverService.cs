@@ -191,7 +191,7 @@ public partial class ParameterResolverService : IParameterResolverService
         // ${today} → today's date
         if (expression == "today")
         {
-            return baseDate.ToString("yyyy-MM-dd");
+            return baseDate.Date;
         }
 
         // ${today-N} or ${today+N} → date arithmetic (days)
@@ -201,7 +201,7 @@ public partial class ParameterResolverService : IParameterResolverService
             var op = match.Groups[1].Value;
             var days = int.Parse(match.Groups[2].Value);
             var result = op == "+" ? baseDate.AddDays(days) : baseDate.AddDays(-days);
-            return result.ToString("yyyy-MM-dd");
+            return result.Date;
         }
 
         // ${today-Nd} days, ${today-Nw} weeks, ${today-Nm} months
@@ -220,11 +220,11 @@ public partial class ParameterResolverService : IParameterResolverService
                 "m" => baseDate.AddMonths(amount * multiplier),
                 _ => baseDate
             };
-            return result.ToString("yyyy-MM-dd");
+            return result.Date;
         }
 
         // Fallback
-        return baseDate.ToString("yyyy-MM-dd");
+        return baseDate.Date;
     }
 
     private object ResolveDateTimeExpression(string expression, DateTime baseDateTime)
@@ -232,7 +232,7 @@ public partial class ParameterResolverService : IParameterResolverService
         // ${now} → current datetime
         if (expression == "now")
         {
-            return baseDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+            return baseDateTime;
         }
 
         // ${now-N} or ${now+N} → datetime arithmetic (hours by default)
@@ -242,7 +242,7 @@ public partial class ParameterResolverService : IParameterResolverService
             var op = match.Groups[1].Value;
             var hours = int.Parse(match.Groups[2].Value);
             var result = op == "+" ? baseDateTime.AddHours(hours) : baseDateTime.AddHours(-hours);
-            return result.ToString("yyyy-MM-dd HH:mm:ss");
+            return result;
         }
 
         // ${now-Nh} hours, ${now-Nm} minutes
@@ -260,11 +260,11 @@ public partial class ParameterResolverService : IParameterResolverService
                 "m" => baseDateTime.AddMinutes(amount * multiplier),
                 _ => baseDateTime
             };
-            return result.ToString("yyyy-MM-dd HH:mm:ss");
+            return result;
         }
 
         // Fallback
-        return baseDateTime.ToString("yyyy-MM-dd HH:mm:ss");
+        return baseDateTime;
     }
 
     private object ResolveFormattedDateExpression(string baseExpr, string format, DateTime baseDateTime)
@@ -294,7 +294,7 @@ public partial class ParameterResolverService : IParameterResolverService
             lowerName.Contains("asofdate"))
         {
             _logger.LogDebug("Null parameter '{Name}' defaulting to today's date", paramName);
-            return context.ExecutionTime.Date.ToString("yyyy-MM-dd");
+            return context.ExecutionTime.Date;
         }
 
         // Return DBNull for database compatibility

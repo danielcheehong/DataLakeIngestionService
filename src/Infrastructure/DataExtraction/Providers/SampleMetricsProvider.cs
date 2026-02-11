@@ -40,13 +40,17 @@ public class SampleMetricsProvider : IDotNetDataProvider
 
         if (parameters?.TryGetValue("startDate", out var sd) == true && sd != null)
         {
-            if (DateTime.TryParse(sd.ToString(), out var parsedStart))
+            if (sd is DateTime dtStart)
+                startDate = dtStart;
+            else if (DateTime.TryParse(sd.ToString(), out var parsedStart))
                 startDate = parsedStart;
         }
 
         if (parameters?.TryGetValue("endDate", out var ed) == true && ed != null)
         {
-            if (DateTime.TryParse(ed.ToString(), out var parsedEnd))
+            if (ed is DateTime dtEnd)
+                endDate = dtEnd;
+            else if (DateTime.TryParse(ed.ToString(), out var parsedEnd))
                 endDate = parsedEnd;
         }
 
