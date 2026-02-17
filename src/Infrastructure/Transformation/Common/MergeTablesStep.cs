@@ -2,6 +2,7 @@ using System.Data;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Pipeline;
+using DataLakeIngestionService.Core.Utilities;
 using Microsoft.Extensions.Logging;
 
 namespace DataLakeIngestionService.Infrastructure.Transformation.Common;
@@ -82,8 +83,8 @@ public class MergeTablesStep : ITransformationStep
         if (tables.Count == 0)
             return new DataTable();
 
-        // Use first table as template
-        var result = tables[0].Clone();
+        // Use harmonized schema to avoid column size mismatch between Oracle and SQL Server
+        var result = DataTableSchemaHelper.CreateHarmonizedSchema(tables[0]);
         
         foreach (var table in tables)
         {
@@ -92,7 +93,14 @@ public class MergeTablesStep : ITransformationStep
             foreach (DataRow row in table.Rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                result.ImportRow(row);
+                
+                // Manual row copy instead of ImportRow to avoid schema constraint issues
+                var newRow = result.NewRow();
+                for (int i = 0; i < table.Columns.Count; i++)
+                {
+                    newRow[i] = row[i];
+                }
+                result.Rows.Add(newRow);
             }
         }
 
@@ -137,13 +145,13 @@ public class MergeTablesStep : ITransformationStep
         JoinType joinType,
         CancellationToken cancellationToken)
     {
-        // Create result table with columns from both tables
-        var result = new DataTable();
+        // Build column definitions for harmonized schema
+        var columnDefinitions = new List<(string Name, Type DataType, bool AllowDBNull)>();
         
         // Add columns from left table
         foreach (DataColumn col in left.Columns)
         {
-            result.Columns.Add(col.ColumnName, col.DataType);
+            columnDefinitions.Add((col.ColumnName, col.DataType, col.AllowDBNull));
         }
         
         // Add columns from right table (skip join key columns to avoid duplicates)
@@ -152,13 +160,16 @@ public class MergeTablesStep : ITransformationStep
         {
             if (!joinKeys.Contains(col.ColumnName, StringComparer.OrdinalIgnoreCase))
             {
-                var newColName = result.Columns.Contains(col.ColumnName) 
+                var newColName = columnDefinitions.Any(c => c.Name.Equals(col.ColumnName, StringComparison.OrdinalIgnoreCase))
                     ? $"{col.ColumnName}_2" 
                     : col.ColumnName;
-                result.Columns.Add(newColName, col.DataType);
+                columnDefinitions.Add((newColName, col.DataType, col.AllowDBNull));
                 rightColumnsToAdd.Add(col);
             }
         }
+
+        // Create result table with harmonized schema to avoid column size mismatch
+        var result = DataTableSchemaHelper.CreateHarmonizedSchema(columnDefinitions);
 
         // Build index on right table for efficient lookup
         var rightIndex = new Dictionary<string, List<DataRow>>();

@@ -1,4 +1,5 @@
 using System.Data;
+using System.Globalization;
 using System.Text.Json;
 using DataLakeIngestionService.Core.Enums;
 using DataLakeIngestionService.Core.Exceptions;
@@ -106,7 +107,7 @@ public class OracleDataSource : IDataSource
                 param.OracleDbType = OracleDbType.Decimal;
                 param.Value = decimalValue;
             }
-            else if (DateTime.TryParse(strValue, out DateTime dateValue))
+            else if (DateTime.TryParseExact(strValue, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dateValue))
             {
                 param.OracleDbType = OracleDbType.Date;
                 param.Value = dateValue;
