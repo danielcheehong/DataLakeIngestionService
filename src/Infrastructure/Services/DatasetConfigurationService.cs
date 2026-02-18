@@ -44,16 +44,48 @@ public class DatasetConfigurationService : IDatasetConfigurationService
                         Converters = {  new JsonStringEnumConverter() } // To handle data source type enums as strings.
                     });
 
+            
+                    // normalize parameters/config dictionaries so they are not JsonElement
                     if (config != null)
                     {
-                            // Convert JsonElement parameters to native types
+                        // Single source parameters
                         if (config.Source?.Parameters != null)
-                        {
                             config.Source.Parameters = ConvertJsonElementParameters(config.Source.Parameters);
+
+                        // Multi-source parameters (if your model supports it)
+                        if (config.Sources != null)
+                        {
+                            foreach (var src in config.Sources)
+                            {
+                                if (src?.Parameters != null)
+                                    src.Parameters = ConvertJsonElementParameters(src.Parameters);
+                            }
                         }
+
+                        // ✅ Transformation configs (THIS is the missing piece)
+                        if (config.Transformations != null)
+                        {
+                            foreach (var t in config.Transformations)
+                            {
+                                if (t?.Config != null)
+                                    t.Config = ConvertJsonElementParameters(t.Config);
+                            }
+                        }
+
                         configs.Add(config);
                         _logger.LogInformation("Loaded dataset configuration: {DatasetId}", config.DatasetId);
                     }
+
+                    // if (config != null)
+                    // {
+                    //         // Convert JsonElement parameters to native types
+                    //     if (config.Source?.Parameters != null)
+                    //     {
+                    //         config.Source.Parameters = ConvertJsonElementParameters(config.Source.Parameters);
+                    //     }
+                    //     configs.Add(config);
+                    //     _logger.LogInformation("Loaded dataset configuration: {DatasetId}", config.DatasetId);
+                    // }
                 }
                 catch (Exception ex)
                 {
