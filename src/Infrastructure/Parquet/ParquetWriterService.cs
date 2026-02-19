@@ -26,6 +26,12 @@ public class ParquetWriterService : IParquetWriter
                 _logger.LogWarning("No data to write to Parquet");
                 return;
             }
+            // Remove ID_CONTA column if present
+            if (data.Columns.Contains("ID_CONTA"))
+            {
+                data.Columns.Remove("ID_CONTA");
+                _logger.LogInformation("Removed 'ID_CONTA' column from DataTable before Parquet write.");
+            }
 
             // Convert DateTimeOffset columns to DateTime
             ConvertDateTimeOffsetColumns(data);
