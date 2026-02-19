@@ -41,6 +41,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Folder Include="ReferenceData\" />
     <Folder Include="Transformation\Common\" />
     <Folder Include="Vault\" />
   </ItemGroup>
