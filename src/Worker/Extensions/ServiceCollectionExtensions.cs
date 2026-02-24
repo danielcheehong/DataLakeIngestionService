@@ -3,6 +3,7 @@ using DataLakeIngestionService.Core.Handlers;
 using DataLakeIngestionService.Core.Interfaces.Certificate;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Interfaces.Parquet;
+using DataLakeIngestionService.Core.Interfaces.ReferenceData;
 using DataLakeIngestionService.Core.Interfaces.Services;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Interfaces.Upload;
@@ -11,6 +12,7 @@ using DataLakeIngestionService.Core.Pipeline;
 using DataLakeIngestionService.Infrastructure.Certificate;
 using DataLakeIngestionService.Infrastructure.DataExtraction;
 using DataLakeIngestionService.Infrastructure.Parquet;
+using DataLakeIngestionService.Infrastructure.ReferenceData;
 using DataLakeIngestionService.Infrastructure.Services;
 using DataLakeIngestionService.Infrastructure.Transformation;
 using DataLakeIngestionService.Infrastructure.Upload;
@@ -54,15 +56,18 @@ public static class ServiceCollectionExtensions
         // Register Infrastructure Services
         services.AddScoped<IDataSourceFactory, DataSourceFactory>();
         services.AddSingleton<IParameterResolverService, ParameterResolverService>();
-        
+
         // Register DotNet Data Provider Factory (auto-discovers providers via assembly scanning)
         services.AddSingleton<IDotNetDataProviderFactory, DotNetDataProviderFactory>();
-        
+
         services.AddSingleton<ITransformationStepFactory, TransformationStepFactory>();
         services.AddScoped<ITransformationEngine, TransformationEngine>();
         services.AddScoped<IParquetWriter, ParquetWriterService>();
         services.AddScoped<ICtlWriter, CtlWriterService>();
         services.AddScoped<IUploadProviderFactory, UploadProviderFactory>();
+
+        // Register ReferenceDataProvider with IServiceScopeFactory
+        services.AddSingleton<IReferenceDataProvider, ReferenceDataProvider>();
 
         // Register Certificate Service
         services.Configure<CertificateServiceOptions>(

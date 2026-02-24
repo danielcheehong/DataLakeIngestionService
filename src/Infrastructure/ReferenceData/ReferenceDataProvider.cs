@@ -5,6 +5,7 @@ using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Interfaces.ReferenceData;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -13,7 +14,7 @@ namespace DataLakeIngestionService.Infrastructure.ReferenceData;
 public class ReferenceDataProvider: IReferenceDataProvider
 {
     private readonly ILogger<ReferenceDataProvider> _logger;
-    private readonly IDataSourceFactory _dataSourceFactory;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly IHostEnvironment _env;
 
@@ -35,12 +36,12 @@ public class ReferenceDataProvider: IReferenceDataProvider
 
     public ReferenceDataProvider(
         ILogger<ReferenceDataProvider> logger,
-        IDataSourceFactory dataSourceFactory,
+        IServiceScopeFactory scopeFactory,
         IConfiguration configuration,
         IHostEnvironment env)
     {
         _logger = logger;
-        _dataSourceFactory = dataSourceFactory;
+        _scopeFactory = scopeFactory;
         _configuration = configuration;
         _env = env;
 
@@ -106,7 +107,9 @@ public class ReferenceDataProvider: IReferenceDataProvider
             "ReferenceDataProvider: Loading '{Key}' from {SourceType} ({ConnName}) with TTL {TtlMinutes} min",
             key, def.SourceType, def.ConnectionStringName, def.Ttl.TotalMinutes);
 
-        var ds = _dataSourceFactory.Create(def.SourceType);
+        using var scope = _scopeFactory.CreateScope();
+        var dataSourceFactory = scope.ServiceProvider.GetRequiredService<IDataSourceFactory>();
+        var ds = dataSourceFactory.Create(def.SourceType);
 
         var dt = await ds.ExtractAsync(
             connectionString: connStr,
