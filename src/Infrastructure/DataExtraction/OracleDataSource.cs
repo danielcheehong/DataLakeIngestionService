@@ -333,9 +333,51 @@ public class OracleDataSource : IDataSource
             }
         }
 
+        // Detect PL/SQL block (contains 'begin', 'end', and 'declare')
+        bool isPlSqlBlock =
+            sqlQuery.IndexOf("begin", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            sqlQuery.IndexOf("end", StringComparison.OrdinalIgnoreCase) >= 0 &&
+            sqlQuery.IndexOf("declare", StringComparison.OrdinalIgnoreCase) >= 0;
+
         var dataTable = new DataTable();
-        using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        dataTable.Load(reader);
+
+        if (isPlSqlBlock)
+        {
+            OracleTransaction? transaction = null;
+            try
+            {
+                transaction = connection.BeginTransaction();
+                command.Transaction = transaction;
+                _logger.LogInformation("PL/SQL block detected. Transaction started for GTT/cursor scope.");
+
+                using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                dataTable.Load(reader);
+
+                transaction.Commit();
+                _logger.LogInformation("Transaction committed after loading DataTable from PL/SQL block.");
+            }
+            catch (Exception ex)
+            {
+                if (transaction != null)
+                {
+                    try
+                    {
+                        transaction.Rollback();
+                        _logger.LogWarning(ex, "Transaction rolled back due to error in PL/SQL block execution.");
+                    }
+                    catch (Exception rollbackEx)
+                    {
+                        _logger.LogError(rollbackEx, "Error during transaction rollback after PL/SQL block failure.");
+                    }
+                }
+                throw;
+            }
+        }
+        else
+        {
+            using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            dataTable.Load(reader);
+        }
 
         // Log DataTable schema for SQL queries too
         _logger.LogDebug("Loaded DataTable schema from Oracle query ({ColumnCount} columns, {RowCount} rows):", 
