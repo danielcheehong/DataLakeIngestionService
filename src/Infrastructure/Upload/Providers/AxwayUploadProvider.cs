@@ -5,10 +5,17 @@ using Renci.SshNet;
 
 namespace DataLakeIngestionService.Infrastructure.Upload.Providers;
 
+
 public class AxwayUploadProvider : IUploadProvider
 {
     private readonly ILogger<AxwayUploadProvider> _logger;
     private readonly AxwayOptions _options;
+
+    // Static semaphore for concurrency control (shared across all instances)
+    private static SemaphoreSlim? _semaphore;
+    private static int _maxConcurrency = 2; // Default fallback
+    private static bool _initialized = false;
+    private static readonly object _initLock = new();
 
     public AxwayUploadProvider(
         ILogger<AxwayUploadProvider> logger,
@@ -16,6 +23,20 @@ public class AxwayUploadProvider : IUploadProvider
     {
         _logger = logger;
         _options = options;
+
+        EnsureSemaphoreInitialized(options);
+    }
+
+    private static void EnsureSemaphoreInitialized(AxwayOptions options)
+    {
+        if (_initialized) return;
+        lock (_initLock)
+        {
+            if (_initialized) return;
+            _maxConcurrency = options.MaxConcurrentConnections > 0 ? options.MaxConcurrentConnections : 2;
+            _semaphore = new SemaphoreSlim(_maxConcurrency, _maxConcurrency);
+            _initialized = true;
+        }
     }
 
     public async Task<IUploadResult> UploadAsync(
@@ -29,6 +50,14 @@ public class AxwayUploadProvider : IUploadProvider
 
         _logger.LogInformation("Uploading {FileName} to Axway SFTP: {Host}:{Path}",
             fileName, _options.Host, fullPath);
+
+        // Wait for semaphore (limit concurrent uploads)
+        if (_semaphore == null)
+        {
+            throw new InvalidOperationException("AxwayUploadProvider semaphore not initialized.");
+        }
+        await _semaphore.WaitAsync(cancellationToken);
+        _logger.LogDebug("Semaphore acquired for Axway upload. CurrentCount: {Count}", _semaphore.CurrentCount);
 
         try
         {
@@ -66,6 +95,11 @@ public class AxwayUploadProvider : IUploadProvider
         {
             _logger.LogError(ex, "Failed to upload {FileName} to Axway SFTP", fileName);
             throw new UploadException($"Axway SFTP upload failed: {ex.Message}", ex);
+        }
+        finally
+        {
+            _semaphore.Release();
+            _logger.LogDebug("Semaphore released for Axway upload. CurrentCount: {Count}", _semaphore.CurrentCount);
         }
     }
 

@@ -9,16 +9,19 @@ public class JobSchedulingService : IHostedService
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly IDatasetConfigurationService _configService;
     private readonly ILogger<JobSchedulingService> _logger;
+    private readonly IConfiguration _configuration;
     private IScheduler? _scheduler;
 
     public JobSchedulingService(
         ISchedulerFactory schedulerFactory,
         IDatasetConfigurationService configService,
-        ILogger<JobSchedulingService> logger)
+        ILogger<JobSchedulingService> logger,
+        IConfiguration configuration)
     {
         _schedulerFactory = schedulerFactory;
         _configService = configService;
         _logger = logger;
+        _configuration = configuration;
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -31,13 +34,27 @@ public class JobSchedulingService : IHostedService
         // Load all dataset configurations and schedule jobs
         var datasets = await _configService.GetDatasetsAsync();
 
-        foreach (var dataset in datasets.Where(d => d.Enabled))
+        var enabledDatasets = datasets.Where(d => d.Enabled).ToList();
+        foreach (var dataset in enabledDatasets)
         {
             await ScheduleDatasetJobAsync(dataset.DatasetId, dataset.CronExpression, cancellationToken);
         }
 
         _logger.LogInformation("Scheduled {Count} dataset ingestion jobs",
-            datasets.Count(d => d.Enabled));
+            enabledDatasets.Count);
+
+        // Check config for run-on-startup
+        var runOnStartup = _configuration.GetValue<bool>("Quartz:RunJobsOnStartup", false);
+        if (runOnStartup)
+        {
+            _logger.LogInformation("Triggering all enabled jobs once on startup as per configuration.");
+            foreach (var dataset in enabledDatasets)
+            {
+                var jobKey = new JobKey(dataset.DatasetId, "DataIngestion");
+                await _scheduler.TriggerJob(jobKey, cancellationToken);
+                _logger.LogInformation("Triggered job for dataset {DatasetId} on startup.", dataset.DatasetId);
+            }
+        }
     }
 
     private async Task ScheduleDatasetJobAsync(string datasetId, string cronExpression, CancellationToken cancellationToken)

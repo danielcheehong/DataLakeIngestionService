@@ -68,6 +68,12 @@ public class Program
             // Build the application
             var app = builder.Build();
 
+            // Start file-based command watcher (for file-based IPC)
+            var commandDir = builder.Configuration["CommandDirectory"] ?? "C:/DataLakeIngestionService/commands";
+            var cts = new CancellationTokenSource();
+            var watcher = new FileCommandWatcher(commandDir, app.Services, cts.Token);
+            watcher.Start();
+
             // Configure HTTP pipeline
             if (app.Environment.IsDevelopment())
             {
