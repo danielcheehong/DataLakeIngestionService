@@ -354,4 +354,92 @@ public class JobManagementService : IJobManagementService
             };
         }
     }
+
+    public async Task<DatasetConfigUpdateResultDto> UpdateDatasetConfigAsync(
+        string datasetId,
+        string? cronExpression,
+        Dictionary<string, string>? parameterUpdates,
+        string? uploadProvider,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(cronExpression)
+                && (parameterUpdates == null || parameterUpdates.Count == 0)
+                && string.IsNullOrWhiteSpace(uploadProvider))
+            {
+                return new DatasetConfigUpdateResultDto
+                {
+                    Success = false,
+                    Message = "At least one of cronExpression, parameterUpdates, or uploadProvider must be supplied.",
+                    DatasetId = datasetId
+                };
+            }
+
+            var updatedConfig = await _configService.UpdateDatasetFileAsync(
+                datasetId,
+                cronExpression?.Trim(),
+                parameterUpdates,
+                uploadProvider?.Trim(),
+                cancellationToken);
+
+            // Live-reschedule Quartz trigger if cron expression changed
+            if (!string.IsNullOrWhiteSpace(cronExpression))
+            {
+                try
+                {
+                    var scheduler = await _schedulerFactory.GetScheduler(cancellationToken);
+                    var triggerKey = new TriggerKey($"{datasetId}-trigger", JobGroup);
+                    var existingTrigger = await scheduler.GetTrigger(triggerKey, cancellationToken);
+
+                    if (existingTrigger != null)
+                    {
+                        var newTrigger = TriggerBuilder.Create()
+                            .WithIdentity(triggerKey)
+                            .ForJob(new JobKey(datasetId, JobGroup))
+                            .WithCronSchedule(cronExpression)
+                            .Build();
+
+                        await scheduler.RescheduleJob(triggerKey, newTrigger, cancellationToken);
+                        _logger.LogInformation(
+                            "Live-rescheduled job '{DatasetId}' with cron '{CronExpression}'",
+                            datasetId, cronExpression);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // File and cache already updated — log but do not fail the response
+                    _logger.LogWarning(ex,
+                        "Config updated but live Quartz reschedule failed for dataset '{DatasetId}'", datasetId);
+                }
+            }
+
+            return new DatasetConfigUpdateResultDto
+            {
+                Success = true,
+                Message = $"Dataset configuration for '{datasetId}' updated successfully.",
+                DatasetId = datasetId,
+                UpdatedConfig = updatedConfig
+            };
+        }
+        catch (KeyNotFoundException)
+        {
+            return new DatasetConfigUpdateResultDto
+            {
+                Success = false,
+                Message = $"Dataset '{datasetId}' not found.",
+                DatasetId = datasetId
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to update dataset config for '{DatasetId}'", datasetId);
+            return new DatasetConfigUpdateResultDto
+            {
+                Success = false,
+                Message = $"Failed to update dataset config: {ex.Message}",
+                DatasetId = datasetId
+            };
+        }
+    }
 }

@@ -50,4 +50,16 @@ public interface IJobManagementService
     /// Reschedules all jobs from the dataset configuration files.
     /// </summary>
     Task<RescheduleResultDto> RescheduleAllJobsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Surgically updates the dataset JSON config file (cronExpression, named parameter values,
+    /// upload provider), live-reschedules the Quartz trigger if the cron changed, and returns
+    /// the full updated configuration.
+    /// </summary>
+    Task<DatasetConfigUpdateResultDto> UpdateDatasetConfigAsync(
+        string datasetId,
+        string? cronExpression,
+        Dictionary<string, string>? parameterUpdates,
+        string? uploadProvider,
+        CancellationToken cancellationToken = default);
 }

@@ -1,3 +1,5 @@
+using DataLakeIngestionService.Core.Models;
+
 namespace DataLakeIngestionService.Worker.Models;
 
 /// <summary>
@@ -68,4 +70,37 @@ public class RescheduleResultDto
     public int JobsScheduled { get; set; }
     public List<string> ScheduledDatasets { get; set; } = new();
     public List<string> FailedDatasets { get; set; } = new();
+}
+
+/// <summary>
+/// Request body for PATCH /api/datasets/{datasetId}/config.
+/// All fields are optional; at least one must be supplied.
+/// </summary>
+public class DatasetConfigUpdateRequest
+{
+    /// <summary>Quartz cron expression (6-part, seconds-first, e.g. "0 0 6 * * ?"). Optional.</summary>
+    public string? CronExpression { get; set; }
+
+    /// <summary>
+    /// Named parameter values to update inside source / sources[*].parameters.
+    /// Key = exact parameter name as it appears in the JSON (e.g. "p_ref_date").
+    /// Value = new value (e.g. "2025-12-01").
+    /// Only parameters that already exist in the config are updated; no new keys are injected.
+    /// </summary>
+    public Dictionary<string, string>? ParameterUpdates { get; set; }
+
+    /// <summary>Upload provider name ("FileSystem", "AzureBlob", "AwsS3", "Axway"). Optional.</summary>
+    public string? UploadProvider { get; set; }
+}
+
+/// <summary>
+/// Response for PATCH /api/datasets/{datasetId}/config.
+/// </summary>
+public class DatasetConfigUpdateResultDto
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string? DatasetId { get; set; }
+    /// <summary>The full updated dataset configuration. Null on failure.</summary>
+    public DatasetConfiguration? UpdatedConfig { get; set; }
 }

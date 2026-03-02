@@ -1,4 +1,5 @@
 using DataLakeIngestionService.Core.Models;
+using DataLakeIngestionService.Worker.Models;
 using DataLakeIngestionService.Worker.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -108,5 +109,36 @@ public static class JobEndpoints
         .WithName("RescheduleAllJobs")
         .WithSummary("Reschedule all jobs")
         .WithDescription("Reloads all dataset configurations and reschedules jobs. Existing jobs are removed first.");
+
+        // PATCH /api/datasets/{datasetId}/config - Update dataset JSON configuration
+        group.MapPatch("/datasets/{datasetId}/config", async (
+            string datasetId,
+            [FromBody] DatasetConfigUpdateRequest request,
+            IJobManagementService service,
+            CancellationToken ct) =>
+        {
+            var result = await service.UpdateDatasetConfigAsync(
+                datasetId,
+                request.CronExpression,
+                request.ParameterUpdates,
+                request.UploadProvider,
+                ct);
+
+            if (!result.Success)
+            {
+                return result.Message.Contains("not found")
+                    ? Results.NotFound(result)
+                    : Results.BadRequest(result);
+            }
+
+            return Results.Ok(result);
+        })
+        .WithName("UpdateDatasetConfig")
+        .WithSummary("Update dataset configuration")
+        .WithDescription(
+            "Surgically updates the dataset JSON file. Supports updating cronExpression, " +
+            "named parameter values in source/sources[*].parameters, and upload provider. " +
+            "Returns the full updated configuration. Use POST /api/jobs/{datasetId}/trigger to run the job afterwards.")
+        .WithTags("Dataset Config");
     }
 }
