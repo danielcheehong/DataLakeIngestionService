@@ -11,6 +11,12 @@ namespace DataLakeIngestionService.Worker.Jobs;
 [DisallowConcurrentExecution]
 public class DataIngestionJob : IJob
 {
+    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
     private readonly ILogger<DataIngestionJob> _logger;
     private readonly IDatasetConfigurationService _configService;
     private readonly ITransformationStepFactory _transformationStepFactory;
@@ -40,21 +46,36 @@ public class DataIngestionJob : IJob
     public async Task Execute(IJobExecutionContext context)
     {
         var datasetId = context.JobDetail.JobDataMap.GetString("DatasetId");
-        
+        var isRunOnce = context.JobDetail.JobDataMap.ContainsKey("IsRunOnce")
+                        && context.JobDetail.JobDataMap.GetString("IsRunOnce") == "true";
+
         // Generate unique execution ID: datasetId.timestamp-shortGuid
         var executionId = $"{datasetId}.{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
 
         try
         {
-            _logger.LogInformation("Starting ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
+            _logger.LogInformation("Starting ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
                 datasetId, executionId);
-            
-            // Retrieve dataset configuration from the configuration json files in the Datasets folder.
-            var config = await _configService.GetDatasetByIdAsync(datasetId!);
+
+            // For run-once jobs use the config embedded in the job data map; otherwise read from disk
+            DatasetConfiguration? config;
+            var configOverrideJson = context.MergedJobDataMap.ContainsKey("ConfigOverride")
+                ? context.MergedJobDataMap.GetString("ConfigOverride")
+                : null;
+            if (!string.IsNullOrEmpty(configOverrideJson))
+            {
+                config = System.Text.Json.JsonSerializer.Deserialize<DatasetConfiguration>(configOverrideJson, _jsonOptions);
+                _logger.LogInformation("Using config override from job data map for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
+                    datasetId, executionId);
+            }
+            else
+            {
+                config = await _configService.GetDatasetByIdAsync(datasetId!);
+            }
 
             if (config == null)
             {
-                _logger.LogWarning("Dataset configuration not found: {DatasetId}, ExecutionId: {ExecutionId}", 
+                _logger.LogWarning("Dataset configuration not found: {DatasetId}, ExecutionId: {ExecutionId}",
                     datasetId, executionId);
                 return;
             }
@@ -63,7 +84,7 @@ public class DataIngestionJob : IJob
             // does not schedule jobs for disabled datasets.
             if (!config.Enabled)
             {
-                _logger.LogInformation("Dataset is disabled: {DatasetId}, ExecutionId: {ExecutionId}", 
+                _logger.LogInformation("Dataset is disabled: {DatasetId}, ExecutionId: {ExecutionId}",
                     datasetId, executionId);
                 return;
             }
@@ -124,9 +145,25 @@ public class DataIngestionJob : IJob
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}", 
+            _logger.LogError(ex, "Failed ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
                 datasetId, executionId);
             throw new JobExecutionException(ex, refireImmediately: false);
+        }
+        finally
+        {
+            // Self-delete the temporary job after execution (success or failure)
+            if (isRunOnce)
+            {
+                try
+                {
+                    await context.Scheduler.DeleteJob(context.JobDetail.Key);
+                    _logger.LogInformation("Run-once job self-removed: {DatasetId}", datasetId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to self-remove run-once job: {DatasetId}", datasetId);
+                }
+            }
         }
     }
 

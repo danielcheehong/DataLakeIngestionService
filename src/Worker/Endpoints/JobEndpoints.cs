@@ -48,24 +48,22 @@ public static class JobEndpoints
         .WithSummary("Trigger a job immediately")
         .WithDescription("Triggers an existing scheduled job to run immediately by dataset ID.");
 
-        // POST /api/jobs - Add and execute job from configuration
+        // POST /api/jobs - Create and execute a temporary run-once job from configuration
         group.MapPost("/jobs", async (
             [FromBody] DatasetConfiguration config,
-            [FromQuery] bool triggerImmediately,
             IJobManagementService service,
-            CancellationToken ct) =>
+            CancellationToken ct,
+            [FromQuery] bool triggerImmediately = true) =>
         {
             if (string.IsNullOrWhiteSpace(config.DatasetId))
-            {
                 return Results.BadRequest(new { Error = "DatasetId is required." });
-            }
 
             var result = await service.AddAndTriggerJobAsync(config, triggerImmediately, ct);
-            return result.Success ? Results.Created($"/api/jobs/{config.DatasetId}", result) : Results.BadRequest(result);
+            return result.Success ? Results.Created($"/api/jobs/{result.DatasetId}", result) : Results.BadRequest(result);
         })
         .WithName("AddJob")
-        .WithSummary("Add and optionally trigger a new job")
-        .WithDescription("Creates a new scheduled job from the provided dataset configuration. Set triggerImmediately=true to execute it right away.");
+        .WithSummary("Create and execute a temporary run-once job")
+        .WithDescription("Creates a temporary Quartz job from the provided dataset configuration, executes it once, then self-removes. The original scheduled job is unaffected.");
 
         // DELETE /api/jobs/{datasetId} - Remove a scheduled job
         group.MapDelete("/jobs/{datasetId}", async (

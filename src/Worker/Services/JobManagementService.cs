@@ -13,7 +13,13 @@ namespace DataLakeIngestionService.Worker.Services;
 public class JobManagementService : IJobManagementService
 {
     private const string JobGroup = "DataIngestion";
-    
+
+    private static readonly System.Text.Json.JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() }
+    };
+
     private readonly ISchedulerFactory _schedulerFactory;
     private readonly IDatasetConfigurationService _configService;
     private readonly ILogger<JobManagementService> _logger;
@@ -131,54 +137,49 @@ public class JobManagementService : IJobManagementService
         try
         {
             var scheduler = await _schedulerFactory.GetScheduler(cancellationToken);
-            var jobKey = new JobKey(config.DatasetId, JobGroup);
 
-            // Delete existing job if present
-            if (await scheduler.CheckExists(jobKey, cancellationToken))
-            {
-                await scheduler.DeleteJob(jobKey, cancellationToken);
-                _logger.LogInformation("Deleted existing job for dataset: {DatasetId}", config.DatasetId);
-            }
+            // Always a temporary run-once job — unique ID to avoid any conflicts
+            var runOnceId = $"{config.DatasetId}-runonce-{Guid.NewGuid().ToString("N")[..8]}";
+            var jobKey = new JobKey(runOnceId, JobGroup);
 
-            // Create new job
+            // Serialize the full posted config into the job data map
+            var configJson = System.Text.Json.JsonSerializer.Serialize(config, _jsonOptions);
+
             var job = JobBuilder.Create<DataIngestionJob>()
                 .WithIdentity(jobKey)
-                .UsingJobData("DatasetId", config.DatasetId)
+                .UsingJobData("DatasetId", runOnceId)
+                .UsingJobData("ConfigOverride", configJson)
+                .UsingJobData("IsRunOnce", "true")
                 .StoreDurably(true)
                 .Build();
 
-            // Create trigger with cron schedule
+            // Fire-once trigger — no cron schedule
             var trigger = TriggerBuilder.Create()
-                .WithIdentity($"{config.DatasetId}-trigger", JobGroup)
-                .WithCronSchedule(config.CronExpression)
+                .WithIdentity($"{runOnceId}-trigger", JobGroup)
+                .StartNow()
+                .WithSimpleSchedule(x => x.WithRepeatCount(0))
                 .Build();
 
             await scheduler.ScheduleJob(job, trigger, cancellationToken);
+            _logger.LogInformation("Scheduled run-once job: {RunOnceId} for dataset: {DatasetId}", runOnceId, config.DatasetId);
 
-            _logger.LogInformation(
-                "Scheduled job for dataset: {DatasetId} with cron: {CronExpression}",
-                config.DatasetId, config.CronExpression);
-
-            // Trigger immediately if requested
             if (triggerImmediately)
             {
                 await scheduler.TriggerJob(jobKey, cancellationToken);
-                _logger.LogInformation("Triggered job immediately for dataset: {DatasetId}", config.DatasetId);
+                _logger.LogInformation("Triggered run-once job immediately: {RunOnceId}", runOnceId);
             }
 
             return new JobTriggerResultDto
             {
                 Success = true,
-                Message = triggerImmediately
-                    ? $"Job for dataset '{config.DatasetId}' scheduled and triggered immediately."
-                    : $"Job for dataset '{config.DatasetId}' scheduled successfully.",
-                DatasetId = config.DatasetId,
+                Message = $"Run-once job '{runOnceId}' triggered for dataset '{config.DatasetId}'.",
+                DatasetId = runOnceId,
                 TriggeredAt = triggerImmediately ? DateTimeOffset.UtcNow : null
             };
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to add/trigger job for dataset: {DatasetId}", config.DatasetId);
+            _logger.LogError(ex, "Failed to add/trigger run-once job for dataset: {DatasetId}", config.DatasetId);
             return new JobTriggerResultDto
             {
                 Success = false,
