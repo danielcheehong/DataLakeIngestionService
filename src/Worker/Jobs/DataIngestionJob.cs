@@ -189,9 +189,13 @@ public class DataIngestionJob : IJob
             }
 
             // Build connection string with vault password resolution.
-            connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
-                connectionStringTemplate, 
+            // SecretValue keeps the resolved password in a zeroable char[] buffer;
+            // Expose() materialises the string only for the metadata assignment, then
+            // the buffer is zeroed when connSecret is disposed at the end of this block.
+            using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
+                connectionStringTemplate,
                 cancellationToken);
+            connectionString = connSecret.Expose();
         }
 
         // Build query from configuration
@@ -257,8 +261,9 @@ public class DataIngestionJob : IJob
                     throw new InvalidOperationException(
                         $"Connection string not found: {source.ConnectionStringKey} for source: {source.SourceId}");
                 }
-                connectionString = await _connectionStringBuilder.BuildConnectionStringAsync(
+                using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
                     connectionStringTemplate, cancellationToken);
+                connectionString = connSecret.Expose();
             }
 
             // Build query

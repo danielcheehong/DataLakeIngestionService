@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
 using DataLakeIngestionService.Core.Interfaces.Vault;
+using DataLakeIngestionService.Core.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -56,7 +57,7 @@ public class SecuritasVaultService : IVaultService
         }
     }
 
-    public async Task<string> GetSecretAsync(string secretPath, CancellationToken cancellationToken = default)
+    public async Task<SecretValue> GetSecretAsync(string secretPath, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -94,7 +95,8 @@ public class SecuritasVaultService : IVaultService
             }
 
             _logger.LogInformation("Successfully retrieved secret from Securitas vault");
-            return secret;
+            // Wrap in SecretValue so the caller can zero the buffer via Dispose().
+            return new SecretValue(secret);
         }
         catch (HttpRequestException ex) when (ex.Message.Contains("SSL") || ex.Message.Contains("certificate"))
         {

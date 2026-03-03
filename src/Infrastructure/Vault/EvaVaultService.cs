@@ -1,6 +1,7 @@
 using System;
 using System.Text.Json;
 using DataLakeIngestionService.Core.Interfaces.Vault;
+using DataLakeIngestionService.Core.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -30,7 +31,7 @@ public class EvaVaultService : IVaultService
             ?? throw new InvalidOperationException("Vault ApiKey not configured");
     }
 
-    public async Task<string> GetSecretAsync(string secretPath, CancellationToken cancellationToken = default)
+    public async Task<SecretValue> GetSecretAsync(string secretPath, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -59,7 +60,8 @@ public class EvaVaultService : IVaultService
             }
 
             _logger.LogInformation("Successfully retrieved secret from EVA vault");
-            return secret;
+            // Wrap in SecretValue so the caller can zero the buffer via Dispose().
+            return new SecretValue(secret);
         }
         catch (Exception ex)
         {

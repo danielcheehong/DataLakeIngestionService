@@ -4,6 +4,9 @@ using DataLakeIngestionService.Core.Enums;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Interfaces.ReferenceData;
+using DataLakeIngestionService.Core.Interfaces.Services;
+using DataLakeIngestionService.Core.Security;
+using DataLakeIngestionService.Infrastructure.Services;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -14,6 +17,7 @@ namespace DataLakeIngestionService.Infrastructure.ReferenceData;
 public class ReferenceDataProvider: IReferenceDataProvider
 {
     private readonly ILogger<ReferenceDataProvider> _logger;
+    private readonly IConnectionStringBuilder _connectionStringBuilder;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly IHostEnvironment _env;
@@ -37,10 +41,12 @@ public class ReferenceDataProvider: IReferenceDataProvider
     public ReferenceDataProvider(
         ILogger<ReferenceDataProvider> logger,
         IServiceScopeFactory scopeFactory,
+        IConnectionStringBuilder connectionStringBuilder,
         IConfiguration configuration,
         IHostEnvironment env)
     {
         _logger = logger;
+        _connectionStringBuilder = connectionStringBuilder;
         _scopeFactory = scopeFactory;
         _configuration = configuration;
         _env = env;
@@ -98,8 +104,13 @@ public class ReferenceDataProvider: IReferenceDataProvider
 
     private async Task<CacheEntry> LoadAndCacheAsync(string key, ReferenceDefinition def, CancellationToken ct)
     {
-        var connStr = _configuration.GetConnectionString(def.ConnectionStringName);
-        if (string.IsNullOrWhiteSpace(connStr))
+        var connectionStringTemplate = _configuration.GetConnectionString(def.ConnectionStringName);
+
+        // BuildConnectionStringAsync returns a SecretValue whose internal char[] buffer is
+        // zeroed on Dispose(), keeping the resolved password off the heap as a plain string.
+        using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(connectionStringTemplate!, ct);
+
+        if (connSecret.IsEmpty)
             throw new TransformationException(
                 $"Connection string '{def.ConnectionStringName}' not found or empty for reference key '{key}'.");
 
@@ -112,7 +123,7 @@ public class ReferenceDataProvider: IReferenceDataProvider
         var ds = dataSourceFactory.Create(def.SourceType);
 
         var dt = await ds.ExtractAsync(
-            connectionString: connStr,
+            connectionString: connSecret.Expose(),   // materialises the string only for this call; connSecret is disposed at the end of this method
             query: def.QueryOrCommand,
             extractionType: def.ExtractionType,
             parameters: def.Parameters,
