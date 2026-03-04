@@ -79,7 +79,6 @@ public class ConnectionStringBuilder : IConnectionStringBuilder
 
             // ── Phase 3: splice template + secrets into a single char[] ────────────────
             assemblyBuffer = new char[totalLength];
-            var templateSpan = connectionStringTemplate.AsSpan();
             var srcPos = 0;
             var destPos = 0;
 
@@ -87,17 +86,17 @@ public class ConnectionStringBuilder : IConnectionStringBuilder
             {
                 // Copy the template segment that precedes this placeholder.
                 var segLen = matches[i].Index - srcPos;
-                templateSpan.Slice(srcPos, segLen).CopyTo(assemblyBuffer.AsSpan(destPos));
+                connectionStringTemplate.CopyTo(srcPos, assemblyBuffer, destPos, segLen);
                 destPos += segLen;
                 srcPos = matches[i].Index + matches[i].Length;
 
                 // Splice the secret characters in place of the placeholder.
-                secretFragments[i].AsSpan().CopyTo(assemblyBuffer.AsSpan(destPos));
+                Array.Copy(secretFragments[i], 0, assemblyBuffer, destPos, secretFragments[i].Length);
                 destPos += secretFragments[i].Length;
             }
 
             // Copy any trailing template characters after the last placeholder.
-            templateSpan.Slice(srcPos).CopyTo(assemblyBuffer.AsSpan(destPos));
+            connectionStringTemplate.CopyTo(srcPos, assemblyBuffer, destPos, connectionStringTemplate.Length - srcPos);
 
             _logger.LogInformation("Successfully resolved all vault placeholders");
 
