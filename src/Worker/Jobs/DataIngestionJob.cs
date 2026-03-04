@@ -196,6 +196,9 @@ public class DataIngestionJob : IJob
                 connectionStringTemplate,
                 cancellationToken);
             connectionString = connSecret.Expose();
+            if (string.IsNullOrWhiteSpace(connectionString))
+                throw new InvalidOperationException(
+                    $"Resolved connection string is empty for key: {config.Source.ConnectionStringKey}, ExecutionId: {executionId}");
         }
 
         // Build query from configuration
@@ -264,6 +267,9 @@ public class DataIngestionJob : IJob
                 using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
                     connectionStringTemplate, cancellationToken);
                 connectionString = connSecret.Expose();
+                if (string.IsNullOrWhiteSpace(connectionString))
+                    throw new InvalidOperationException(
+                        $"Resolved connection string is empty for key: {source.ConnectionStringKey}, SourceId: {source.SourceId}");
             }
 
             // Build query

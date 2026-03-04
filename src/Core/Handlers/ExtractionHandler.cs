@@ -70,6 +70,8 @@ public class ExtractionHandler : BasePipelineHandler
             : throw new ExtractionException("ExtractionType not found in metadata");
         var connectionString = context.Metadata["ConnectionString"]?.ToString() 
             ?? throw new ExtractionException("ConnectionString not found in metadata");
+        if (string.IsNullOrWhiteSpace(connectionString))
+            throw new ExtractionException("ConnectionString is empty or whitespace in metadata");
         var query = context.Metadata["Query"]?.ToString() 
             ?? throw new ExtractionException("Query not found in metadata");
         var parameters = context.Metadata.TryGetValue("Parameters", out var p) 

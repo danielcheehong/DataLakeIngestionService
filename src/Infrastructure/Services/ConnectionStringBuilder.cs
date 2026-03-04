@@ -1,5 +1,6 @@
 using System;
 using System.Text.RegularExpressions;
+using System.Threading;
 using DataLakeIngestionService.Core.Interfaces.Services;
 using DataLakeIngestionService.Core.Interfaces.Vault;
 using DataLakeIngestionService.Core.Security;
@@ -17,6 +18,10 @@ public class ConnectionStringBuilder : IConnectionStringBuilder
     // Regex to match: {vault:path/to/secret}
     private static readonly Regex VaultPlaceholderRegex =
         new Regex(@"\{vault:([^}]+)\}", RegexOptions.Compiled);
+
+    // Guards TryGetValue+Clone and PostEvictionCallback+Clear so the cached
+    // char[] cannot be zeroed between the two steps (TOCTOU race fix).
+    private readonly SemaphoreSlim _cacheLock = new SemaphoreSlim(1, 1);
 
     public ConnectionStringBuilder(
         IVaultService vaultService,
@@ -143,14 +148,23 @@ public class ConnectionStringBuilder : IConnectionStringBuilder
     {
         var cacheKey = $"vault_secret_{secretPath}";
 
-        // ── Cache hit: return a copy so callers can zero their copy independently ─────
-        if (_cache.TryGetValue<char[]>(cacheKey, out var cachedChars))
+        // ── Cache hit: hold the lock across TryGetValue+Clone so the eviction
+        //   callback cannot zero the array between the two operations ────────
+        await _cacheLock.WaitAsync(cancellationToken);
+        try
         {
-            _logger.LogDebug("Retrieved secret from cache: {Path}", secretPath);
-            return (char[])cachedChars!.Clone();
+            if (_cache.TryGetValue<char[]>(cacheKey, out var cachedChars))
+            {
+                _logger.LogDebug("Retrieved secret from cache: {Path}", secretPath);
+                return (char[])cachedChars!.Clone();
+            }
+        }
+        finally
+        {
+            _cacheLock.Release();
         }
 
-        // ── Cache miss: fetch from vault ───────────────────────────────────────────────
+        // ── Cache miss: fetch from vault (lock released during async I/O) ────
         _logger.LogInformation("Retrieving secret from vault: {Path}", secretPath);
 
         using var secretValue = await _vaultService.GetSecretAsync(secretPath, cancellationToken);
@@ -163,16 +177,35 @@ public class ConnectionStringBuilder : IConnectionStringBuilder
         var cacheOptions = new MemoryCacheEntryOptions()
             .SetAbsoluteExpiration(TimeSpan.FromMinutes(5))
             .SetPriority(CacheItemPriority.High)
-            // Zero the cached char[] as soon as the entry is evicted from memory.
-            .RegisterPostEvictionCallback(static (_, value, _, _) =>
+            // Acquire the same lock before zeroing so an in-flight Clone() on
+            // another thread always sees the original characters, never all-'\0'.
+            .RegisterPostEvictionCallback((_, value, _, state) =>
             {
-                if (value is char[] chars)
-                    Array.Clear(chars, 0, chars.Length);
-            });
+                var lockObj = (SemaphoreSlim)state!;
+                lockObj.Wait();
+                try
+                {
+                    if (value is char[] chars)
+                        Array.Clear(chars, 0, chars.Length);
+                }
+                finally
+                {
+                    lockObj.Release();
+                }
+            }, _cacheLock);
 
-        _cache.Set(cacheKey, charsForCache, cacheOptions);
-
-        // Return an independent copy for this call; the cache retains its own copy.
-        return (char[])charsForCache.Clone();
+        // Hold the lock while setting the cache entry and cloning, so a concurrent
+        // reader cannot observe a partially-written entry without the lock.
+        await _cacheLock.WaitAsync(cancellationToken);
+        try
+        {
+            _cache.Set(cacheKey, charsForCache, cacheOptions);
+            // Return an independent copy; the cache retains its own copy.
+            return (char[])charsForCache.Clone();
+        }
+        finally
+        {
+            _cacheLock.Release();
+        }
     }
 }
