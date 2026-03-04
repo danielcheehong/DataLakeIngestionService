@@ -169,6 +169,11 @@ public class ConnectionStringBuilder : IConnectionStringBuilder
 
         using var secretValue = await _vaultService.GetSecretAsync(secretPath, cancellationToken);
 
+        if (secretValue.IsEmpty)
+            throw new InvalidOperationException(
+                $"Vault returned an empty secret for path '{secretPath}'. " +
+                $"Verify the secret exists and the service account has read access.");
+
         // Copy the secret into a char[] that will be stored in the cache.
         var charsForCache = secretValue.CopyBuffer();
 

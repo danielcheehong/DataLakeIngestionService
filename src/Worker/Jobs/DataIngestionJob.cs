@@ -188,17 +188,21 @@ public class DataIngestionJob : IJob
                 throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
             }
 
-            // Build connection string with vault password resolution.
-            // SecretValue keeps the resolved password in a zeroable char[] buffer;
-            // Expose() materialises the string only for the metadata assignment, then
-            // the buffer is zeroed when connSecret is disposed at the end of this block.
-            using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
-                connectionStringTemplate,
-                cancellationToken);
-            connectionString = connSecret.Expose();
-            if (string.IsNullOrWhiteSpace(connectionString))
-                throw new InvalidOperationException(
-                    $"Resolved connection string is empty for key: {config.Source.ConnectionStringKey}, ExecutionId: {executionId}");
+            // Resolve vault placeholders if present; otherwise use the template directly.
+            if (_connectionStringBuilder.ContainsVaultPlaceholders(connectionStringTemplate))
+            {
+                using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
+                    connectionStringTemplate,
+                    cancellationToken);
+                connectionString = connSecret.Expose();
+                if (string.IsNullOrWhiteSpace(connectionString))
+                    throw new InvalidOperationException(
+                        $"Resolved connection string is empty for key: {config.Source.ConnectionStringKey}, ExecutionId: {executionId}");
+            }
+            else
+            {
+                connectionString = connectionStringTemplate;
+            }
         }
 
         // Build query from configuration
@@ -264,12 +268,20 @@ public class DataIngestionJob : IJob
                     throw new InvalidOperationException(
                         $"Connection string not found: {source.ConnectionStringKey} for source: {source.SourceId}");
                 }
-                using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
-                    connectionStringTemplate, cancellationToken);
-                connectionString = connSecret.Expose();
-                if (string.IsNullOrWhiteSpace(connectionString))
-                    throw new InvalidOperationException(
-                        $"Resolved connection string is empty for key: {source.ConnectionStringKey}, SourceId: {source.SourceId}");
+                // Resolve vault placeholders if present; otherwise use the template directly.
+                if (_connectionStringBuilder.ContainsVaultPlaceholders(connectionStringTemplate))
+                {
+                    using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
+                        connectionStringTemplate, cancellationToken);
+                    connectionString = connSecret.Expose();
+                    if (string.IsNullOrWhiteSpace(connectionString))
+                        throw new InvalidOperationException(
+                            $"Resolved connection string is empty for key: {source.ConnectionStringKey}, SourceId: {source.SourceId}");
+                }
+                else
+                {
+                    connectionString = connectionStringTemplate;
+                }
             }
 
             // Build query
