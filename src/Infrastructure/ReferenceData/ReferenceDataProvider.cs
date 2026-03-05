@@ -123,7 +123,7 @@ public class ReferenceDataProvider: IReferenceDataProvider
         var ds = dataSourceFactory.Create(def.SourceType);
 
         var dt = await ds.ExtractAsync(
-            connectionString: connSecret.Expose(),   // materialises the string only for this call; connSecret is disposed at the end of this method
+            connectionStringFactory: () => connSecret.Expose(),   // Expose() is called inline inside the connection ctor; connSecret is still alive in the using scope
             query: def.QueryOrCommand,
             extractionType: def.ExtractionType,
             parameters: def.Parameters,

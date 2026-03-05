@@ -6,7 +6,7 @@ namespace DataLakeIngestionService.Core.Interfaces.DataExtraction;
 public interface IDataSource
 {
     Task<DataTable> ExtractAsync(
-        string connectionString,
+        Func<string> connectionStringFactory,
         string query,
         ExtractionType extractionType,
         Dictionary<string, object>? parameters,

@@ -20,7 +20,7 @@ public class OracleDataSource : IDataSource
     }
 
     public async Task<DataTable> ExtractAsync(
-        string connectionString,
+        Func<string> connectionStringFactory,
         string query,
         ExtractionType extractionType,
         Dictionary<string, object>? parameters,
@@ -28,7 +28,7 @@ public class OracleDataSource : IDataSource
     {
         try
         {
-            using var connection = new OracleConnection(connectionString);
+            using var connection = new OracleConnection(connectionStringFactory());
             await connection.OpenAsync(cancellationToken);
 
             _logger.LogInformation("Executing Oracle {ExtractionType}: {Query}", 

@@ -3,6 +3,7 @@ using DataLakeIngestionService.Core.Interfaces.Services;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Models;
 using DataLakeIngestionService.Core.Pipeline;
+using DataLakeIngestionService.Core.Security;
 using Microsoft.Extensions.Logging;
 using Quartz;
 
@@ -52,6 +53,8 @@ public class DataIngestionJob : IJob
         // Generate unique execution ID: datasetId.timestamp-shortGuid
         var executionId = $"{datasetId}.{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
 
+        // Declared outside try so the finally block can dispose connection secrets.
+        Dictionary<string, object>? metadata = null;
         try
         {
             _logger.LogInformation("Starting ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
@@ -96,8 +99,6 @@ public class DataIngestionJob : IJob
             var transformationSteps = BuildTransformationSteps(config, executionId);
 
             // Build pipeline metadata based on single or multi-source configuration
-            Dictionary<string, object> metadata;
-
             if (config.HasMultipleSources)
             {
                 // Multi-source: build source configurations list
@@ -151,6 +152,17 @@ public class DataIngestionJob : IJob
         }
         finally
         {
+            // Dispose connection secrets to zero their internal char[] buffers.
+            if (metadata != null)
+            {
+                if (metadata.TryGetValue("ConnectionSecret", out var secretObj) && secretObj is SecretValue sv)
+                    sv.Dispose();
+
+                if (metadata.TryGetValue("SourceConfigurations", out var configsObj)
+                    && configsObj is List<SourceExtractionConfig> sourceConfigs)
+                    foreach (var cfg in sourceConfigs) cfg.Dispose();
+            }
+
             // Self-delete the temporary job after execution (success or failure)
             if (isRunOnce)
             {
@@ -176,7 +188,9 @@ public class DataIngestionJob : IJob
         CancellationToken cancellationToken)
     {
         // Get connection string template from configuration (not required for DotNet sources)
-        var connectionString = string.Empty;
+        // SecretValue keeps the assembled connection string in a zeroable char[] buffer instead
+        // of an immutable string on the heap. Disposal happens in Execute() after the pipeline runs.
+        SecretValue? connSecret = null;
         if (config.Source.Type != Core.Enums.DataSourceType.DotNet)
         {
             var connectionStringTemplate = _configuration.GetConnectionString(config.Source.ConnectionStringKey);
@@ -188,20 +202,20 @@ public class DataIngestionJob : IJob
                 throw new InvalidOperationException($"Connection string not found: {config.Source.ConnectionStringKey}");
             }
 
-            // Resolve vault placeholders if present; otherwise use the template directly.
+            // Resolve vault placeholders if present; otherwise wrap the template directly.
+            // In both cases the secret stays in a SecretValue (char[]) — never stored as a string.
             if (_connectionStringBuilder.ContainsVaultPlaceholders(connectionStringTemplate))
             {
-                using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
+                connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
                     connectionStringTemplate,
                     cancellationToken);
-                connectionString = connSecret.Expose();
-                if (string.IsNullOrWhiteSpace(connectionString))
+                if (connSecret.IsEmpty)
                     throw new InvalidOperationException(
                         $"Resolved connection string is empty for key: {config.Source.ConnectionStringKey}, ExecutionId: {executionId}");
             }
             else
             {
-                connectionString = connectionStringTemplate;
+                connSecret = new SecretValue(connectionStringTemplate);
             }
         }
 
@@ -224,13 +238,12 @@ public class DataIngestionJob : IJob
         _logger.LogDebug("Resolved {Count} parameters for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
             resolvedParameters.Count, datasetId, executionId);
 
-        return new Dictionary<string, object>
+        var result = new Dictionary<string, object>
         {
             ["DatasetId"] = datasetId,
             ["ExecutionId"] = executionId,
             ["SourceType"] = config.Source.Type.ToString(),
             ["ExtractionType"] = config.Source.ExtractionType,
-            ["ConnectionString"] = connectionString,
             ["Query"] = query,
             ["Parameters"] = resolvedParameters,
             ["TransformationSteps"] = transformationSteps,
@@ -240,6 +253,9 @@ public class DataIngestionJob : IJob
             ["KeepLocalCopy"] = config.Upload.KeepLocalCopy,
             ["LocalCopyPath"] = config.Upload.LocalCopyPath ?? string.Empty
         };
+        // Added outside the initializer so DotNet sources (connSecret == null) get no entry.
+        if (connSecret != null) result["ConnectionSecret"] = connSecret;
+        return result;
     }
 
     private async Task<List<SourceExtractionConfig>> BuildSourceConfigurationsAsync(
@@ -259,7 +275,7 @@ public class DataIngestionJob : IJob
             }
 
             // Get connection string (not required for DotNet sources)
-            var connectionString = string.Empty;
+            SecretValue? connSecret = null;
             if (source.Type != Core.Enums.DataSourceType.DotNet)
             {
                 var connectionStringTemplate = _configuration.GetConnectionString(source.ConnectionStringKey);
@@ -268,19 +284,18 @@ public class DataIngestionJob : IJob
                     throw new InvalidOperationException(
                         $"Connection string not found: {source.ConnectionStringKey} for source: {source.SourceId}");
                 }
-                // Resolve vault placeholders if present; otherwise use the template directly.
+                // Resolve vault placeholders if present; otherwise wrap the template directly.
                 if (_connectionStringBuilder.ContainsVaultPlaceholders(connectionStringTemplate))
                 {
-                    using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
+                    connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(
                         connectionStringTemplate, cancellationToken);
-                    connectionString = connSecret.Expose();
-                    if (string.IsNullOrWhiteSpace(connectionString))
+                    if (connSecret.IsEmpty)
                         throw new InvalidOperationException(
                             $"Resolved connection string is empty for key: {source.ConnectionStringKey}, SourceId: {source.SourceId}");
                 }
                 else
                 {
-                    connectionString = connectionStringTemplate;
+                    connSecret = new SecretValue(connectionStringTemplate);
                 }
             }
 
@@ -302,7 +317,7 @@ public class DataIngestionJob : IJob
                 SourceId = source.SourceId,
                 SourceType = source.Type.ToString(),
                 ExtractionType = source.ExtractionType,
-                ConnectionString = connectionString,
+                ConnectionSecret = connSecret,
                 Query = query,
                 Parameters = resolvedParameters
             });

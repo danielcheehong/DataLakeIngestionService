@@ -19,7 +19,7 @@ public class SqlServerDataSource : IDataSource
     }
 
     public async Task<DataTable> ExtractAsync(
-        string connectionString,
+        Func<string> connectionStringFactory,
         string query,
         ExtractionType extractionType,
         Dictionary<string, object>? parameters,
@@ -27,7 +27,7 @@ public class SqlServerDataSource : IDataSource
     {
         try
         {
-            using var connection = new SqlConnection(connectionString);
+            using var connection = new SqlConnection(connectionStringFactory());
             await connection.OpenAsync(cancellationToken);
 
             var dynamicParams = new DynamicParameters();

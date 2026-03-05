@@ -1,5 +1,6 @@
 using System.Data;
 using DataLakeIngestionService.Core.Enums;
+using DataLakeIngestionService.Core.Security;
 
 namespace DataLakeIngestionService.Core.Pipeline;
 
@@ -70,13 +71,30 @@ public class PipelineExecutionResult
 
 /// <summary>
 /// Configuration for a single source extraction, passed via metadata for multi-source datasets.
+/// Implements IDisposable so that the connection secret (char[] buffer) is zeroed as soon as
+/// the pipeline has finished consuming it.
 /// </summary>
-public class SourceExtractionConfig
+public class SourceExtractionConfig : IDisposable
 {
+    private bool _disposed;
+
     public string SourceId { get; set; } = string.Empty;
     public string SourceType { get; set; } = string.Empty;
     public Core.Enums.ExtractionType ExtractionType { get; set; }
-    public string ConnectionString { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Holds the resolved connection string in a zeroable char[] buffer.
+    /// Null for DotNet (code-generator) sources that do not require a connection.
+    /// </summary>
+    public SecretValue? ConnectionSecret { get; set; }
+
     public string Query { get; set; } = string.Empty;
     public Dictionary<string, object> Parameters { get; set; } = new();
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        ConnectionSecret?.Dispose();
+        _disposed = true;
+    }
 }

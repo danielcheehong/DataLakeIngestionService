@@ -3,6 +3,7 @@ using DataLakeIngestionService.Core.Enums;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Pipeline;
+using DataLakeIngestionService.Core.Security;
 using Microsoft.Extensions.Logging;
 
 namespace DataLakeIngestionService.Core.Handlers;
@@ -68,10 +69,16 @@ public class ExtractionHandler : BasePipelineHandler
         var extractionType = context.Metadata.TryGetValue("ExtractionType", out var et) && et != null
             ? (ExtractionType)et
             : throw new ExtractionException("ExtractionType not found in metadata");
-        var connectionString = context.Metadata["ConnectionString"]?.ToString() 
-            ?? throw new ExtractionException("ConnectionString not found in metadata");
-        if (string.IsNullOrWhiteSpace(connectionString))
-            throw new ExtractionException("ConnectionString is empty or whitespace in metadata");
+
+        // Build a factory that exposes the secret only at the moment the connection is opened.
+        // The SecretValue char[] is kept alive until ExtractionHandler disposes it after the call.
+        var connSecret = context.Metadata.TryGetValue("ConnectionSecret", out var secretObj)
+            ? secretObj as SecretValue
+            : null;
+        Func<string> connFactory = connSecret != null
+            ? () => connSecret.Expose()
+            : () => string.Empty;
+
         var query = context.Metadata["Query"]?.ToString() 
             ?? throw new ExtractionException("Query not found in metadata");
         var parameters = context.Metadata.TryGetValue("Parameters", out var p) 
@@ -81,7 +88,7 @@ public class ExtractionHandler : BasePipelineHandler
         var dataSource = _dataSourceFactory.Create(sourceType);
         
         var extractedData = await dataSource.ExtractAsync(
-            connectionString,
+            connFactory,
             query,
             extractionType,
             parameters,
@@ -136,8 +143,14 @@ public class ExtractionHandler : BasePipelineHandler
 
             var dataSource = _dataSourceFactory.Create(sourceConfig.SourceType);
             
+            // Build factory so Expose() is called inline inside the data source constructor,
+            // never bound to a named string variable in our code.
+            Func<string> connFactory = sourceConfig.ConnectionSecret != null
+                ? () => sourceConfig.ConnectionSecret.Expose()
+                : () => string.Empty;
+
             var extractedData = await dataSource.ExtractAsync(
-                sourceConfig.ConnectionString,
+                connFactory,
                 sourceConfig.Query,
                 sourceConfig.ExtractionType,
                 sourceConfig.Parameters,
