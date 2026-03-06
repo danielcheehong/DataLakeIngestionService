@@ -1,5 +1,7 @@
+using System.Diagnostics;
 using DataLakeIngestionService.Core.Enums;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry.Trace;
 
 namespace DataLakeIngestionService.Core.Pipeline;
 
@@ -37,40 +39,54 @@ public abstract class BasePipelineHandler : IPipelineHandler
 
         PipelineResult result;
 
-        try
+        // Span is scoped to this stage's work only; ends before the next handler starts.
+        using (var activity = PipelineActivitySource.Source.StartActivity($"pipeline.stage.{StageName}"))
         {
-            Logger.LogInformation("Starting stage: {StageName}", StageName);
-            
-            // Execute the stage-specific logic
-            result = await ExecuteAsync(context);
-            
-            // Log metrics
-            LogStageMetrics(context, result);
-            
-            Logger.LogInformation("Completed stage: {StageName} - Success: {Success}", 
-                StageName, result.IsSuccess);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "Unhandled exception in stage: {StageName}", StageName);
-            
-            // Handle unexpected errors
-            context.Errors.Add(new PipelineError
+            try
             {
-                Stage = StageName,
-                Message = $"Unhandled exception in {StageName}",
-                Exception = ex,
-                Timestamp = DateTime.UtcNow,
-                Severity = ErrorSeverity.Critical
-            });
+                Logger.LogInformation("Starting stage: {StageName}", StageName);
 
-            result = new PipelineResult
+                // Execute the stage-specific logic
+                result = await ExecuteAsync(context);
+
+                // Log metrics
+                LogStageMetrics(context, result);
+
+                // Propagate key metrics as span tags
+                foreach (var kvp in result.StageMetrics)
+                    activity?.SetTag($"stage.{kvp.Key.ToLowerInvariant()}", kvp.Value?.ToString());
+
+                if (!result.IsSuccess)
+                    activity?.SetStatus(ActivityStatusCode.Error, result.Message);
+
+                Logger.LogInformation("Completed stage: {StageName} - Success: {Success}",
+                    StageName, result.IsSuccess);
+            }
+            catch (Exception ex)
             {
-                IsSuccess = false,
-                Message = ex.Message,
-                ShouldContinue = false
-            };
-        }
+                Logger.LogError(ex, "Unhandled exception in stage: {StageName}", StageName);
+
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+
+                // Handle unexpected errors
+                context.Errors.Add(new PipelineError
+                {
+                    Stage = StageName,
+                    Message = $"Unhandled exception in {StageName}",
+                    Exception = ex,
+                    Timestamp = DateTime.UtcNow,
+                    Severity = ErrorSeverity.Critical
+                });
+
+                result = new PipelineResult
+                {
+                    IsSuccess = false,
+                    Message = ex.Message,
+                    ShouldContinue = false
+                };
+            }
+        } // span ends here — before the chain continues to the next handler
 
         // Continue to next handler if successful and should continue
         if (result.ShouldContinue && _nextHandler != null)

@@ -20,6 +20,8 @@ using DataLakeIngestionService.Infrastructure.Upload.Providers;
 using DataLakeIngestionService.Infrastructure.Vault;
 using DataLakeIngestionService.Worker.Jobs;
 using DataLakeIngestionService.Worker.Services;
+using OpenTelemetry;
+using OpenTelemetry.Trace;
 using Quartz;
 
 namespace DataLakeIngestionService.Worker.Extensions;
@@ -191,6 +193,16 @@ public static class ServiceCollectionExtensions
 
         // Register Job Scheduling Service
         services.AddHostedService<JobSchedulingService>();
+
+        // Register OpenTelemetry tracing
+        services.AddOpenTelemetry()
+            .WithTracing(tracing => tracing
+                .AddSource(PipelineActivitySource.Name)
+                .AddConsoleExporter()
+                .AddOtlpExporter(o =>
+                {
+                    o.Endpoint = new Uri(configuration["OpenTelemetry:OtlpEndpoint"] ?? "http://localhost:4317");
+                }));
 
         return services;
     }

@@ -1,9 +1,11 @@
 using System.Data;
+using System.Diagnostics;
 using DataLakeIngestionService.Core.Exceptions;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Pipeline;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry.Trace;
 
 namespace DataLakeIngestionService.Infrastructure.Transformation;
 
@@ -35,7 +37,10 @@ public class TransformationEngine : ITransformationEngine
         foreach (var step in steps)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            
+
+            using var stepActivity = PipelineActivitySource.Source.StartActivity($"transformation.step.{step.Name}");
+            stepActivity?.SetTag("step.name", step.Name);
+
             // Check if step should execute in current environment
             if (!ShouldExecuteInEnvironment(step, currentEnvironment))
             {
@@ -44,13 +49,23 @@ public class TransformationEngine : ITransformationEngine
                     step.Name,
                     currentEnvironment,
                     step.Environments?.Count > 0 ? string.Join(", ", step.Environments) : "ALL");
+                stepActivity?.SetTag("step.skipped", true);
                 continue;
             }
 
             _logger.LogInformation("Applying transformation step: {StepName}", step.Name);
-            
-            await step.TransformAsync(context, cancellationToken);
-            
+
+            try
+            {
+                await step.TransformAsync(context, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                stepActivity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                stepActivity?.AddException(ex);
+                throw;
+            }
+
             _logger.LogDebug(
                 "Transformation step {StepName} completed. ExtractedData rows: {RowCount}, ExtractedDataSets count: {DataSetCount}",
                 step.Name, 

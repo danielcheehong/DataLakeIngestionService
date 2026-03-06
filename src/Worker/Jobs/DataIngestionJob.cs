@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Interfaces.Services;
 using DataLakeIngestionService.Core.Interfaces.Transformation;
@@ -5,6 +6,7 @@ using DataLakeIngestionService.Core.Models;
 using DataLakeIngestionService.Core.Pipeline;
 using DataLakeIngestionService.Core.Security;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry.Trace;
 using Quartz;
 
 namespace DataLakeIngestionService.Worker.Jobs;
@@ -52,6 +54,11 @@ public class DataIngestionJob : IJob
 
         // Generate unique execution ID: datasetId.timestamp-shortGuid
         var executionId = $"{datasetId}.{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
+
+        using var activity = PipelineActivitySource.Source.StartActivity("ingestion.execute");
+        activity?.SetTag("dataset.id", datasetId);
+        activity?.SetTag("execution.id", executionId);
+        activity?.SetTag("job.run_once", isRunOnce);
 
         // Declared outside try so the finally block can dispose connection secrets.
         Dictionary<string, object>? metadata = null;
@@ -139,6 +146,8 @@ public class DataIngestionJob : IJob
             }
             else
             {
+                activity?.SetStatus(ActivityStatusCode.Error,
+                    $"Pipeline failed with {result.Errors.Count} error(s)");
                 _logger.LogError(
                     "Ingestion failed for dataset: {DatasetId}, ExecutionId: {ExecutionId}, Errors: {ErrorCount}",
                     datasetId, executionId, result.Errors.Count);
@@ -146,6 +155,8 @@ public class DataIngestionJob : IJob
         }
         catch (Exception ex)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+            activity?.AddException(ex);
             _logger.LogError(ex, "Failed ingestion for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
                 datasetId, executionId);
             throw new JobExecutionException(ex, refireImmediately: false);

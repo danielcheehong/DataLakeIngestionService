@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace DataLakeIngestionService.Core.Pipeline;
@@ -41,9 +42,15 @@ public class DataPipeline
 
         _logger.LogInformation("Starting pipeline execution for job {JobId}", context.JobId);
 
+        using var activity = PipelineActivitySource.Source.StartActivity("pipeline.execute");
+        activity?.SetTag("job.id", context.JobId);
+
         var result = await _firstHandler.HandleAsync(context);
 
         var totalDuration = DateTime.UtcNow - context.StartTime;
+
+        if (!result.IsSuccess)
+            activity?.SetStatus(ActivityStatusCode.Error, result.Message);
 
         _logger.LogInformation(
             "Pipeline execution completed for job {JobId} - Success: {Success}, Duration: {Duration}s",

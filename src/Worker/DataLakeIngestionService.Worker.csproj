@@ -45,6 +45,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- OpenTelemetry -->
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console" Version="1.15.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Use None with Update instead of Content with Include -->
     <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="appsettings.*.json" CopyToOutputDirectory="PreserveNewest" />

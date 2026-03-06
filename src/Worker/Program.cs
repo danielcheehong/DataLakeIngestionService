@@ -11,9 +11,11 @@ public class Program
     {
         // Configure Serilog first
         Log.Logger = new LoggerConfiguration()
-            .WriteTo.Console()
-            .WriteTo.File("logs/datalake-.log", rollingInterval: RollingInterval.Day)
-            .CreateBootstrapLogger();
+                .Enrich.With<ActivityEnricher>()
+                .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{TraceId}:{SpanId}] {Message:lj}{NewLine}{Exception}")
+                .WriteTo.File("logs/datalake-.log", rollingInterval: RollingInterval.Day,
+                    outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} {Level:u3}] [{TraceId}:{SpanId}] {Message:lj}{NewLine}{Exception}")
+                .CreateBootstrapLogger();
 
         try
         {
@@ -27,8 +29,10 @@ public class Program
                 .ReadFrom.Configuration(builder.Configuration)
                 .ReadFrom.Services(services)
                 .Enrich.FromLogContext()
-                .WriteTo.Console()
-                .WriteTo.File("logs/datalake-.log", rollingInterval: RollingInterval.Day));
+                .Enrich.With<ActivityEnricher>()
+                .WriteTo.Console(outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] [{TraceId}:{SpanId}] {Message:lj}{NewLine}{Exception}")
+                .WriteTo.File("logs/datalake-.log", rollingInterval: RollingInterval.Day,
+                    outputTemplate: "[{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} {Level:u3}] [{TraceId}:{SpanId}] {Message:lj}{NewLine}{Exception}"));
 
             // Add cross-platform service support
             // Windows: Run as Windows Service

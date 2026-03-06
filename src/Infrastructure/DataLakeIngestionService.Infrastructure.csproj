@@ -38,6 +38,7 @@
     
     <!-- Utilities -->
     <PackageReference Include="System.Data.DataSetExtensions" Version="4.5.0" />
+    <PackageReference Include="OpenTelemetry.Api" Version="1.15.0" />
   </ItemGroup>
 
   <ItemGroup>
