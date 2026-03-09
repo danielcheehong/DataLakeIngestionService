@@ -17,7 +17,6 @@ namespace DataLakeIngestionService.Infrastructure.ReferenceData;
 public class ReferenceDataProvider: IReferenceDataProvider
 {
     private readonly ILogger<ReferenceDataProvider> _logger;
-    private readonly IConnectionStringBuilder _connectionStringBuilder;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IConfiguration _configuration;
     private readonly IHostEnvironment _env;
@@ -41,12 +40,10 @@ public class ReferenceDataProvider: IReferenceDataProvider
     public ReferenceDataProvider(
         ILogger<ReferenceDataProvider> logger,
         IServiceScopeFactory scopeFactory,
-        IConnectionStringBuilder connectionStringBuilder,
         IConfiguration configuration,
         IHostEnvironment env)
     {
         _logger = logger;
-        _connectionStringBuilder = connectionStringBuilder;
         _scopeFactory = scopeFactory;
         _configuration = configuration;
         _env = env;
@@ -106,9 +103,13 @@ public class ReferenceDataProvider: IReferenceDataProvider
     {
         var connectionStringTemplate = _configuration.GetConnectionString(def.ConnectionStringName);
 
+        using var scope = _scopeFactory.CreateScope();
+        var dataSourceFactory = scope.ServiceProvider.GetRequiredService<IDataSourceFactory>();
+        var connectionStringBuilder = scope.ServiceProvider.GetRequiredService<IConnectionStringBuilder>();
+
         // BuildConnectionStringAsync returns a SecretValue whose internal char[] buffer is
         // zeroed on Dispose(), keeping the resolved password off the heap as a plain string.
-        using var connSecret = await _connectionStringBuilder.BuildConnectionStringAsync(connectionStringTemplate!, ct);
+        using var connSecret = await connectionStringBuilder.BuildConnectionStringAsync(connectionStringTemplate!, ct);
 
         if (connSecret.IsEmpty)
             throw new TransformationException(
@@ -117,9 +118,6 @@ public class ReferenceDataProvider: IReferenceDataProvider
         _logger.LogInformation(
             "ReferenceDataProvider: Loading '{Key}' from {SourceType} ({ConnName}) with TTL {TtlMinutes} min",
             key, def.SourceType, def.ConnectionStringName, def.Ttl.TotalMinutes);
-
-        using var scope = _scopeFactory.CreateScope();
-        var dataSourceFactory = scope.ServiceProvider.GetRequiredService<IDataSourceFactory>();
         var ds = dataSourceFactory.Create(def.SourceType);
 
         var dt = await ds.ExtractAsync(
