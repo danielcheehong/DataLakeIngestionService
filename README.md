@@ -5,7 +5,8 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
 ## Features
 
 - **Multi-Database Support**: Extract from SQL Server (stored procedures) and Oracle (packages with REF CURSORs)
-- **Chain of Responsibility Pipeline**: Modular extraction → transformation → Parquet generation → upload pipeline
+- **Chain of Responsibility Pipeline**: Modular extraction → transformation → Parquet generation → CTL generation → upload pipeline
+- **Multi-Source Datasets**: Extract from multiple databases in a single job and merge them with configurable join/union strategies
 - **Dynamic Transformation Discovery**: Auto-discovers transformation steps via reflection at startup
 - **Scheduled Execution**: Quartz.NET with cron expressions for flexible scheduling
 - **REST API**: Built-in Minimal API for managing jobs and scheduler at runtime
@@ -204,7 +205,11 @@ For production with HTTPS:
         │    └─ ParquetWriterService              │
         │       (Schema inference, Snappy)        │
         ├─────────────────────────────────────────┤
-        │ 4. UploadHandler                        │
+        │ 4. CtlGenerationHandler                 │
+        │    └─ CtlWriterService                  │
+        │       (SHA256 checksum, CSV metadata)   │
+        ├─────────────────────────────────────────┤
+        │ 5. UploadHandler                        │
         │    ├─ UploadProviderFactory             │
         │    ├─ FileSystemUploadProvider          │
         │    └─ AzureBlobStorageProvider          │
@@ -222,10 +227,13 @@ For production with HTTPS:
 ```
 PipelineContext (Job Metadata)
     │
-    ├─► ExtractedData (DataTable)
-    ├─► TransformedData (DataTable)  
-    ├─► ParquetStream (MemoryStream)
-    └─► UploadUri (string)
+    ├─► ExtractedData (DataTable)              ← set by ExtractionHandler
+    ├─► ExtractedDataSets (Dict<id,DataTable>) ← set by ExtractionHandler (multi-source)
+    ├─► TransformedData (DataTable)            ← set by TransformationHandler
+    ├─► ParquetData (byte[])                   ← set by ParquetGenerationHandler
+    ├─► CtlData (byte[])                       ← set by CtlGenerationHandler
+    ├─► CtlFileName (string)                   ← set by CtlGenerationHandler
+    └─► UploadUri (string)                     ← set by UploadHandler
 ```
 
 ## Prerequisites
@@ -1089,6 +1097,66 @@ Each dataset is defined in a JSON file in the `Datasets/` directory:
 }
 ```
 
+### Multi-Source Datasets
+
+A single dataset can extract data from **multiple databases** (e.g., one SQL Server table joined with an Oracle table) and then merge them in the transformation stage.
+
+**How it works:**
+
+1. Use a top-level `sources` array in the dataset JSON instead of the single `source` object
+2. Each source entry requires a unique `sourceId`
+3. `ExtractionHandler` extracts from each source independently and stores the result in `PipelineContext.ExtractedDataSets[sourceId]`
+4. A `MergeTables` transformation step consolidates the separate DataTables into `ExtractedData` before `ParquetGenerationHandler` runs
+
+**Dataset configuration example (two sources):**
+
+```json
+{
+  "datasetId": "trades-with-accounts",
+  "name": "Trades enriched with Account data",
+  "enabled": true,
+  "cronExpression": "0 0 6 * * ?",
+
+  "sources": [
+    {
+      "sourceId": "trades",
+      "type": "SqlServer",
+      "connectionStringKey": "TradesSqlServer",
+      "extractionType": "StoredProcedure",
+      "procedureName": "dbo.sp_GetDailyTrades",
+      "parameters": { "RefDate": "${today}" }
+    },
+    {
+      "sourceId": "accounts",
+      "type": "Oracle",
+      "connectionStringKey": "HROracleDB",
+      "extractionType": "Package",
+      "packageName": "PKG_ACCOUNTS",
+      "procedureName": "GET_ACCOUNTS",
+      "parameters": { "p_ref_date": "${today}" }
+    }
+  ],
+
+  "transformations": [
+    {
+      "type": "MergeTables",
+      "enabled": true,
+      "order": 1,
+      "config": {
+        "mergeType": "leftjoin",
+        "joinKeys": ["ACCOUNT_ID"],
+        "sourceTables": ["trades", "accounts"]
+      }
+    }
+  ],
+
+  "parquet": { "fileNamePattern": "trades_accounts_{date:yyyyMMdd}.parquet" },
+  "upload": { "provider": "FileSystem", "fileSystemConfig": { "relativePath": "Trades/" } }
+}
+```
+
+> **Note:** When using `sources`, each source must have a `sourceId`. The single `source` property (without an array) continues to work unchanged for backward compatibility.
+
 ### Oracle REF CURSOR Support
 
 For Oracle data sources, the service automatically adds a REF CURSOR output parameter named `p_cursor`:
@@ -1270,6 +1338,7 @@ ORDER BY TradeDate DESC
 | `StoredProcedure` | SQL Server stored procedure | `procedureName` |
 | `Package` | Oracle package procedure | `packageName`, `procedureName` |
 | `Query` | Raw SQL from file | `sqlFilePath` |
+| `CodeGenerator` | DotNet code provider that generates a `DataTable` in code; no database connection required | `providerName` |
 
 ### Cross-Platform Paths
 
@@ -1351,7 +1420,8 @@ DataLakeIngestionService/
 │   │   │   ├── ExtractionHandler.cs            # Step 1: Data extraction
 │   │   │   ├── TransformationHandler.cs        # Step 2: Data transformation
 │   │   │   ├── ParquetGenerationHandler.cs     # Step 3: Parquet generation
-│   │   │   └── UploadHandler.cs                # Step 4: Upload
+│   │   │   ├── CtlGenerationHandler.cs         # Step 4: CTL metadata file generation
+│   │   │   └── UploadHandler.cs                # Step 5: Upload
 │   │   ├── Interfaces/                         # Service contracts
 │   │   ├── Models/
 │   │   │   └── DatasetConfiguration.cs         # Dataset model
@@ -1372,7 +1442,8 @@ DataLakeIngestionService/
 │   │   │       ├── DataCleansingStep.cs        # Trim whitespace
 │   │   │       └── DataValidationStep.cs       # Validate columns
 │   │   ├── Parquet/
-│   │   │   └── ParquetWriterService.cs         # Parquet.Net writer
+│   │   │   ├── ParquetWriterService.cs         # Parquet.Net writer
+│   │   │   └── CtlWriterService.cs             # CTL control file writer (CSV)
 │   │   ├── Services/
 │   │   │   ├── ConnectionStringBuilder.cs      # Connection string utilities
 │   │   │   └── DatasetConfigurationService.cs  # Config management
@@ -1412,10 +1483,10 @@ DataLakeIngestionService/
 
 ### Pipeline Architecture
 
-The service uses the **Chain of Responsibility** pattern with four sequential handlers:
+The service uses the **Chain of Responsibility** pattern with five sequential handlers:
 
 ```
-ExtractionHandler → TransformationHandler → ParquetGenerationHandler → UploadHandler
+ExtractionHandler → TransformationHandler → ParquetGenerationHandler → CtlGenerationHandler → UploadHandler
 ```
 
 Each handler:
@@ -1423,6 +1494,71 @@ Each handler:
 2. Updates the `PipelineContext`
 3. Passes control to the next handler
 4. Handles errors and logs results
+
+### CTL File Generation
+
+Every pipeline run produces a **CTL (control) file** alongside the Parquet file. The CTL file is a CSV document that describes the content of the Parquet file and is used by downstream consumers to validate the delivery.
+
+**How it works:**
+
+1. `CtlGenerationHandler` runs immediately after `ParquetGenerationHandler`
+2. It computes a **SHA-256 checksum** of the raw Parquet bytes already held in `PipelineContext.ParquetData`
+3. It delegates formatting to `CtlWriterService`, which serialises the metadata as a single-row CSV
+4. The resulting bytes are stored in `PipelineContext.CtlData`; the file name is stored in `PipelineContext.CtlFileName`
+5. `UploadHandler` then uploads both files (Parquet + CTL) to the configured destination
+
+**CTL file format (CSV):**
+
+```
+RecordCount,RefDate,Checksum,Timestamp,DatasetName,Source
+12500,2026-03-19T10:30:00.0000000Z,3a7f2b...,2026-03-19T10:30:01.0000000Z,trades-daily-sqlserver_20260319103001,SqlServer
+```
+
+| Field | Description | Example |
+|-------|-------------|---------|
+| `RecordCount` | Number of rows in the Parquet file | `12500` |
+| `RefDate` | ISO 8601 UTC timestamp when the handler ran | `2026-03-19T10:30:00.0000000Z` |
+| `Checksum` | SHA-256 hex digest of the raw Parquet bytes | `3a7f2b4c...` |
+| `Timestamp` | ISO 8601 UTC timestamp when the CTL file was generated | `2026-03-19T10:30:01.0000000Z` |
+| `DatasetName` | `{datasetId}_{yyyyMMddHHmmss}` | `trades-daily-sqlserver_20260319103001` |
+| `Source` | Source system type | `SqlServer`, `Oracle` |
+
+**CTL file naming convention:**
+
+```
+{datasetId}_{yyyyMMddHHmmss}.ctl
+Example: trades-daily-sqlserver_20260319103001.ctl
+```
+
+**Error behaviour:**
+
+If `PipelineContext.ParquetData` is null or empty when the handler runs, the stage short-circuits immediately with `ErrorSeverity.Critical` and the pipeline stops — the upload step is not reached.
+
+### Upload Handler
+
+`UploadHandler` uploads **both** the Parquet file and its companion CTL file to the configured provider in a single stage. Both files go to the same destination path.
+
+**Local copy (backup to disk):**
+
+In addition to the primary upload, the handler can save copies of both files to a local directory. This is configured per-dataset:
+
+```json
+{
+  "upload": {
+    "provider": "FileSystem",
+    "fileSystemConfig": { "relativePath": "Trades/" },
+    "keepLocalCopy": true,
+    "localCopyPath": "C:\\Backup\\DataLake\\"
+  }
+}
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `keepLocalCopy` | `bool` | When `true`, saves Parquet + CTL to `localCopyPath` after upload |
+| `localCopyPath` | `string` | Absolute or relative path for local backup files |
+
+**Local copy failures are non-critical** — if writing the local copy fails, the error is logged but the pipeline is marked successful (the primary upload already succeeded).
 
 ### Vault Services
 
@@ -1636,6 +1772,8 @@ public class DateFormatStep : ITransformationStep
 |------|------|-------------|----------------|
 | **DataCleansingStep** | `DataCleansing` | Trims whitespace, removes empty strings | `trimWhitespace`, `removeEmptyStrings` |
 | **DataValidationStep** | `DataValidation` | Validates required columns, email formats | `requiredColumns`, `validateEmail` |
+| **MergeTablesStep** | `MergeTables` | Merges multiple source DataTables via union, inner join, or left join | `mergeType`, `joinKeys`, `sourceTables` |
+| **WhitelistFilterStep** | `WhitelistFilter` | Filters rows to only those whose ID appears in an external CSV allowlist | `csvPath`, `accountIdColumn`, `delimiter`, `encoding` |
 
 **Extending with Custom Steps:**
 
@@ -1644,6 +1782,96 @@ public class DateFormatStep : ITransformationStep
 3. Build the solution
 4. Reference it in dataset JSON using the class name (minus "Step" suffix)
 5. No code changes to factory or DI registration required!
+
+### MergeTablesStep
+
+Combines DataTables extracted from multiple sources (stored in `PipelineContext.ExtractedDataSets`) into a single `DataTable` before Parquet generation. Required when using multi-source datasets.
+
+**Merge types:**
+
+| `mergeType` | Behaviour |
+|-------------|-----------|
+| `union` | Appends all rows from every source table. Column names and order must align across sources. |
+| `innerjoin` | Joins tables on `joinKeys`; only rows that have a matching key in both tables are kept. |
+| `leftjoin` | Joins tables on `joinKeys`; all rows from the left (first) table are kept. Unmatched right-side columns are `NULL`. |
+
+**Configuration example:**
+
+```json
+{
+  "type": "MergeTables",
+  "enabled": true,
+  "order": 1,
+  "config": {
+    "mergeType": "leftjoin",
+    "joinKeys": ["ACCOUNT_ID", "TRADE_DATE"],
+    "sourceTables": ["trades", "accounts"]
+  }
+}
+```
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `mergeType` | `string` | Yes | `union`, `innerjoin`, or `leftjoin` |
+| `joinKeys` | `string[]` | For joins | Column name(s) used as the join condition. Supports composite (multi-column) keys. |
+| `sourceTables` | `string[]` | No | `sourceId` values to merge. Defaults to all entries in `ExtractedDataSets`. |
+
+**Notes:**
+
+- Uses `DataTableSchemaHelper` to harmonise column types between Oracle and SQL Server before merging
+- Duplicate right-side key columns are excluded from the output (or renamed with a `_2` suffix on collision)
+- Throws if fewer than 2 tables are available for a join, or if no `joinKeys` are specified for a join
+
+### WhitelistFilterStep
+
+Filters rows so that only those whose identifier column matches a value listed in an external CSV file are kept. Useful for restricting output to a known set of accounts, entities, or codes.
+
+**Key behaviours:**
+
+- **NO-OP if target column is missing**: if the column specified by `accountIdColumn` does not exist in the DataTable, the step passes all rows through unchanged (matches Python parity behaviour)
+- **File-change cache invalidation**: the CSV is cached in memory and reloaded automatically when the file's `LastWriteTimeUtc` changes
+- **Case-insensitive matching** using `OrdinalIgnoreCase`
+- Handles `DBNull` values and non-breaking spaces (`\u00A0`) during normalisation
+
+**Configuration example:**
+
+```json
+{
+  "type": "WhitelistFilter",
+  "enabled": true,
+  "order": 2,
+  "config": {
+    "csvPath": "C:\\Config\\allowed_accounts.csv",
+    "accountIdColumn": "ACCOUNT_ID",
+    "delimiter": ",",
+    "encoding": "utf-8"
+  }
+}
+```
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `csvPath` | `string` | Yes | Absolute path to the CSV allowlist file |
+| `accountIdColumn` | `string` | Yes | Name of the column in the DataTable to match against the CSV |
+| `delimiter` | `string` | No | CSV field delimiter (default: `,`). Use `";"` for semicolon-separated files. |
+| `encoding` | `string` | No | File encoding (default: `utf-8`) |
+
+**CSV allowlist format:**
+
+The first row is treated as a header and skipped. Only the first column of each data row is read as the allowed ID value:
+
+```csv
+ACCOUNT_ID,ACCOUNT_NAME
+ACC123,Widget Corp
+ACC456,Gadget Inc
+```
+
+**Logged metrics:**
+
+- Total whitelist size loaded from CSV
+- Number of rows before and after filtering
+- Count of rows dropped due to null/blank IDs
+- Count of rows dropped because the ID was not in the allowlist
 
 ### Environment-Based Transformation Execution
 
