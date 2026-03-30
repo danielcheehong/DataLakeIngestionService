@@ -5,8 +5,12 @@ using DataLakeIngestionService.Core.Interfaces.Transformation;
 using DataLakeIngestionService.Core.Models;
 using DataLakeIngestionService.Core.Pipeline;
 using DataLakeIngestionService.Core.Security;
+using DataLakeIngestionService.Worker.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using OpenTelemetry.Trace;
+using Polly;
+using Polly.Retry;
 using Quartz;
 
 namespace DataLakeIngestionService.Worker.Jobs;
@@ -27,6 +31,7 @@ public class DataIngestionJob : IJob
     private readonly IParameterResolverService _parameterResolver;
     private readonly DataPipeline _pipeline;
     private readonly IConfiguration _configuration;
+    private readonly RetryPolicySettings _retrySettings;
 
     public DataIngestionJob(
         ILogger<DataIngestionJob> logger,
@@ -35,7 +40,8 @@ public class DataIngestionJob : IJob
         IConnectionStringBuilder connectionStringBuilder,
         IParameterResolverService parameterResolver,
         DataPipeline pipeline,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IOptions<RetryPolicySettings> retrySettings)
     {
         _logger = logger;
         _configService = configService;
@@ -44,6 +50,7 @@ public class DataIngestionJob : IJob
         _parameterResolver = parameterResolver;
         _pipeline = pipeline;
         _configuration = configuration;
+        _retrySettings = retrySettings.Value;
     }
 
     public async Task Execute(IJobExecutionContext context)
@@ -59,6 +66,7 @@ public class DataIngestionJob : IJob
         activity?.SetTag("dataset.id", datasetId);
         activity?.SetTag("execution.id", executionId);
         activity?.SetTag("job.run_once", isRunOnce);
+        activity?.SetTag("retry.max_attempts", _retrySettings.MaxRetries);
 
         // Declared outside try so the finally block can dispose connection secrets.
         Dictionary<string, object>? metadata = null;
@@ -135,8 +143,40 @@ public class DataIngestionJob : IJob
                 metadata = await BuildSingleSourceMetadataAsync(config, datasetId!, executionId, fileName, transformationSteps, context.CancellationToken);
             }
 
-            // Execute pipeline with execution ID as JobId
-            var result = await _pipeline.ExecuteAsync(metadata, executionId, context.CancellationToken);
+            // Execute pipeline with retry
+            var resiliencePipeline = new ResiliencePipelineBuilder<PipelineExecutionResult>()
+                .AddRetry(new RetryStrategyOptions<PipelineExecutionResult>
+                {
+                    MaxRetryAttempts = _retrySettings.MaxRetries,
+                    BackoffType = DelayBackoffType.Exponential,
+                    Delay = TimeSpan.FromSeconds(_retrySettings.InitialDelaySeconds),
+                    UseJitter = _retrySettings.UseJitter,
+                    ShouldHandle = new PredicateBuilder<PipelineExecutionResult>()
+                        .Handle<Exception>(ex => ex is not OperationCanceledException)
+                        .HandleResult(r => !r.IsSuccess),
+                    OnRetry = args =>
+                    {
+                        var attemptNumber = args.AttemptNumber + 1;
+                        var reason = args.Outcome.Exception?.Message
+                                     ?? $"Pipeline returned failure: {args.Outcome.Result?.Message}";
+                        _logger.LogWarning(
+                            "Retry attempt {AttemptNumber}/{MaxRetries} for dataset: {DatasetId}, ExecutionId: {ExecutionId}. " +
+                            "Delay before next attempt: {RetryDelay}. Reason: {Reason}",
+                            attemptNumber,
+                            _retrySettings.MaxRetries,
+                            datasetId,
+                            executionId,
+                            args.RetryDelay,
+                            reason);
+                        activity?.SetTag("retry.attempt", attemptNumber);
+                        return ValueTask.CompletedTask;
+                    }
+                })
+                .Build();
+
+            var result = await resiliencePipeline.ExecuteAsync(
+                async ct => await _pipeline.ExecuteAsync(metadata, executionId, ct),
+                context.CancellationToken);
 
             if (result.IsSuccess)
             {
@@ -147,11 +187,18 @@ public class DataIngestionJob : IJob
             else
             {
                 activity?.SetStatus(ActivityStatusCode.Error,
-                    $"Pipeline failed with {result.Errors.Count} error(s)");
+                    $"Pipeline failed with {result.Errors.Count} error(s) after {_retrySettings.MaxRetries} retry attempt(s)");
                 _logger.LogError(
-                    "Ingestion failed for dataset: {DatasetId}, ExecutionId: {ExecutionId}, Errors: {ErrorCount}",
-                    datasetId, executionId, result.Errors.Count);
+                    "Ingestion failed for dataset: {DatasetId}, ExecutionId: {ExecutionId}, Errors: {ErrorCount} (after {MaxRetries} retry attempts)",
+                    datasetId, executionId, result.Errors.Count, _retrySettings.MaxRetries);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, "Job cancelled");
+            _logger.LogWarning("Ingestion cancelled for dataset: {DatasetId}, ExecutionId: {ExecutionId}",
+                datasetId, executionId);
+            throw;
         }
         catch (Exception ex)
         {

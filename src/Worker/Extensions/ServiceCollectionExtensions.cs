@@ -19,6 +19,7 @@ using DataLakeIngestionService.Infrastructure.Upload;
 using DataLakeIngestionService.Infrastructure.Upload.Providers;
 using DataLakeIngestionService.Infrastructure.Vault;
 using DataLakeIngestionService.Worker.Jobs;
+using DataLakeIngestionService.Worker.Models;
 using DataLakeIngestionService.Worker.Services;
 using OpenTelemetry;
 using OpenTelemetry.Trace;
@@ -75,6 +76,9 @@ public static class ServiceCollectionExtensions
         services.Configure<CertificateServiceOptions>(
             configuration.GetSection("CertificateService"));
         services.AddSingleton<ICertificateService, LocalCertificateService>();
+
+        // Register retry policy settings
+        services.Configure<RetryPolicySettings>(configuration.GetSection("RetryPolicy"));
 
         // Register HttpClient for vault services with optional certificate auth
         services.AddHttpClient("VaultClient")

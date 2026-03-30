@@ -29,6 +29,9 @@
     <PackageReference Include="Quartz.Extensions.Hosting" Version="3.8.0" />
     <PackageReference Include="Quartz.Serialization.Json" Version="3.8.0" />
     
+    <!-- Resilience -->
+    <PackageReference Include="Polly" Version="8.2.0" />
+    
     <!-- Configuration -->
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.0" />
