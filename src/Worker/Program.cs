@@ -51,6 +51,24 @@ public class Program
                 Log.Information("Configured for Linux systemd hosting");
             }
 
+            // Add CORS — origins configured per environment via CorsAllowedOrigins setting
+            builder.Services.AddCors(options =>
+            {
+                options.AddPolicy("ReactUI", policy =>
+                {
+                    var origins = builder.Configuration
+                        .GetSection("CorsAllowedOrigins")
+                        .Get<string[]>() ?? [];
+
+                    if (origins.Length > 0)
+                        policy.WithOrigins(origins)
+                              .AllowAnyHeader()
+                              .AllowAnyMethod();
+                    else
+                        policy.SetIsOriginAllowed(_ => false);
+                });
+            });
+
             // Add API services
             builder.Services.AddEndpointsApiExplorer();
             builder.Services.AddSwaggerGen(options =>
@@ -88,6 +106,9 @@ public class Program
                     options.RoutePrefix = "swagger";
                 });
             }
+
+            // Apply CORS before routing
+            app.UseCors("ReactUI");
 
             // Map API endpoints
             app.MapJobEndpoints();

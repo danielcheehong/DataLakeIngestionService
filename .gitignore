@@ -65,3 +65,9 @@ Staging/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# React UI
+src/UI/node_modules/
+src/UI/dist/
+src/UI/.env.local
+
