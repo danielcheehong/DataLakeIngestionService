@@ -74,7 +74,7 @@ public class ReferenceDataProvider: IReferenceDataProvider
             ct.ThrowIfCancellationRequested();
 
             var lazy = _cache.GetOrAdd(cacheKey, _ =>
-                new Lazy<Task<CacheEntry>>(() => LoadAndCacheAsync(key, def, ct)));
+                new Lazy<Task<CacheEntry>>(() => LoadAndCacheAsync(key, def, CancellationToken.None)));
 
             CacheEntry entry;
             try
@@ -83,8 +83,9 @@ public class ReferenceDataProvider: IReferenceDataProvider
             }
             catch
             {
-                // failed load should not poison cache
-                _cache.TryRemove(cacheKey, out _);
+                // failed load should not poison cache — remove by identity to avoid
+                // evicting a healthy Lazy that a concurrent caller already inserted
+                _cache.TryRemove(new KeyValuePair<string, Lazy<Task<CacheEntry>>>(cacheKey, lazy));
                 throw;
             }
 
@@ -94,8 +95,8 @@ public class ReferenceDataProvider: IReferenceDataProvider
                 return entry.Master.Copy();
             }
 
-            // expired: remove and loop to reload
-            _cache.TryRemove(cacheKey, out _);
+            // expired: remove and loop to reload — remove by identity only
+            _cache.TryRemove(new KeyValuePair<string, Lazy<Task<CacheEntry>>>(cacheKey, lazy));
         }
     }
 
