@@ -12,6 +12,7 @@ public class UploadProviderFactory : IUploadProviderFactory
     private readonly FileSystemOptions _fileSystemOptions;
     private readonly AzureBlobOptions _azureOptions;
     private readonly AxwayOptions _axwayOptions;
+    private readonly bool _testMode;
 
     public UploadProviderFactory(
         ILogger<FileSystemUploadProvider> fileSystemLogger,
@@ -19,7 +20,8 @@ public class UploadProviderFactory : IUploadProviderFactory
         ILogger<AxwayUploadProvider> axwayLogger,
         FileSystemOptions fileSystemOptions,
         AzureBlobOptions azureOptions,
-        AxwayOptions axwayOptions)
+        AxwayOptions axwayOptions,
+        bool testMode)
     {
         _fileSystemLogger = fileSystemLogger;
         _azureLogger = azureLogger;
@@ -27,10 +29,16 @@ public class UploadProviderFactory : IUploadProviderFactory
         _fileSystemOptions = fileSystemOptions;
         _azureOptions = azureOptions;
         _axwayOptions = axwayOptions;
+        _testMode = testMode;
     }
 
     public IUploadProvider Create(string providerType)
     {
+        if (_testMode)
+        {
+            return new FileSystemUploadProvider(_fileSystemLogger, _fileSystemOptions);
+        }
+
         return providerType.ToLowerInvariant() switch
         {
             "filesystem" => new FileSystemUploadProvider(_fileSystemLogger, _fileSystemOptions),
