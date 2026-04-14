@@ -57,7 +57,14 @@ public class ReferenceDataProvider: IReferenceDataProvider
                 ConnectionStringName: "HROracleDB",
                 QueryOrCommand: "SELECT * FROM VFOC_FILTRA_CONTA_SCV_IWM_UBS",
                 ExtractionType: ExtractionType.Query,
-                Ttl: TimeSpan.FromMinutes(10))
+                Ttl: TimeSpan.FromMinutes(10)),
+
+            ["ReferenceDate"] = new ReferenceDefinition(
+                SourceType: "Oracle",
+                ConnectionStringName: "HROracleDB",
+                QueryOrCommand: "YOUR_PROC_NAME",
+                ExtractionType: ExtractionType.StoredProcedure,
+                Ttl: TimeSpan.FromHours(1))
         };
     }
 
@@ -135,6 +142,18 @@ public class ReferenceDataProvider: IReferenceDataProvider
             key, dt.Rows.Count, dt.Columns.Count, expires);
 
         return new CacheEntry(dt, expires);
+    }
+
+    public async Task<DateTime?> GetDateAsync(string key, CancellationToken ct)
+    {
+        var dt = await GetAsync(key, ct);
+
+        if (dt.Rows.Count == 0 || dt.Columns.Count == 0)
+            return null;
+
+        var raw = dt.Rows[0][0];
+
+        return raw is DBNull || raw is null ? null : Convert.ToDateTime(raw);
     }
 
 }

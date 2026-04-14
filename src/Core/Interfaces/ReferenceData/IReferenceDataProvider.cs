@@ -6,4 +6,5 @@ namespace DataLakeIngestionService.Core.Interfaces.ReferenceData;
 public interface IReferenceDataProvider
 {    
     Task<DataTable> GetAsync(string key, CancellationToken ct);
+    Task<DateTime?> GetDateAsync(string key, CancellationToken ct);
 }
