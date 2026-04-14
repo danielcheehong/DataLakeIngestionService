@@ -208,6 +208,11 @@ public static class ServiceCollectionExtensions
 
         // Register OpenTelemetry tracing
         services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddAttributes(new Dictionary<string, object>
+            {
+                ["cmdbReference"] = configuration["OpenTelemetry:CmdbReference"] ?? string.Empty,
+                ["opEnvironment"] = configuration["OpenTelemetry:OpEnvironment"] ?? string.Empty,
+            }))
             .WithTracing(tracing => tracing
                 .AddSource(PipelineActivitySource.Name)
                 .AddConsoleExporter()
