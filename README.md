@@ -4,18 +4,23 @@ A cross-platform .NET 8 background service for extracting data from SQL Server a
 
 ## Features
 
-- **Multi-Database Support**: Extract from SQL Server (stored procedures) and Oracle (packages with REF CURSORs)
+- **Multi-Database Support**: Extract from SQL Server (stored procedures), Oracle (packages with REF CURSORs), and .NET code generators
 - **Chain of Responsibility Pipeline**: Modular extraction → transformation → Parquet generation → CTL generation → upload pipeline
 - **Multi-Source Datasets**: Extract from multiple databases in a single job and merge them with configurable join/union strategies
+- **Retry with Exponential Backoff**: Polly-based retry policy with configurable max retries, exponential delay, and jitter
 - **Dynamic Transformation Discovery**: Auto-discovers transformation steps via reflection at startup
 - **Scheduled Execution**: Quartz.NET with cron expressions for flexible scheduling
 - **REST API**: Built-in Minimal API for managing jobs and scheduler at runtime
+- **Management UI**: React 19 + TypeScript dashboard for monitoring jobs and scheduler status
 - **Cross-Platform**: Runs on Windows (as Windows Service) and Linux (as systemd daemon)
-- **Multiple Upload Targets**: FileSystem, Azure Blob Storage (AWS S3 and Axway ready for implementation)
+- **Multiple Upload Targets**: FileSystem, Azure Blob Storage, and Axway SFTP
 - **Parquet Generation**: Columnar storage with Snappy compression
 - **Independent Task Execution**: Each dataset runs as an independent Quartz job with concurrent execution control
 - **Dapper Integration**: Lightweight ORM for efficient data extraction
+- **Distributed Tracing**: OpenTelemetry with OTLP exporter and Serilog TraceId/SpanId correlation
+- **Secure Credential Handling**: Zeroable `SecretValue` (char[] buffer) for in-memory connection strings
 - **Structured Logging**: Serilog with console and file outputs
+- **File-Based IPC**: FileCommandWatcher enables external processes to query the scheduler without HTTP
 
 ## REST API
 
@@ -33,6 +38,7 @@ The service exposes a REST API for managing Quartz scheduled jobs at runtime. By
 | `POST` | `/api/scheduler/pause` | Pause (suspend) all scheduled jobs |
 | `POST` | `/api/scheduler/resume` | Resume all paused jobs |
 | `POST` | `/api/scheduler/reschedule` | Reload all dataset configs and reschedule jobs |
+| `PATCH` | `/api/datasets/{datasetId}/config` | Update a dataset's cron, parameters, or upload provider at runtime |
 | `GET` | `/health` | Health check endpoint |
 
 ### Swagger UI
@@ -128,6 +134,19 @@ curl -X POST http://localhost:5080/api/scheduler/reschedule
 }
 ```
 
+**Update a dataset configuration at runtime:**
+```bash
+curl -X PATCH http://localhost:5080/api/datasets/trades-daily-sqlserver/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cronExpression": "0 0 6 * * ?",
+    "parameters": { "StartDate": "2025-01-01" },
+    "uploadProvider": "AzureBlob"
+  }'
+```
+
+All three fields are optional — only the fields present in the body are updated. When `cronExpression` changes, the Quartz trigger is live-rescheduled without restarting the service.
+
 ### API Configuration
 
 Configure the API port in `appsettings.json`:
@@ -183,7 +202,8 @@ For production with HTTPS:
         │  - Resolves connection string           │
         │  - Generates file name from pattern     │
         │  - Builds pipeline metadata             │
-        │  - Executes DataPipeline                │
+        │  - Executes DataPipeline (with Polly    │
+        │    retry on transient failures)         │
         └────────────────────┬────────────────────┘
                              │
         ┌────────────────────▼────────────────────┐
@@ -192,7 +212,8 @@ For production with HTTPS:
         │ 1. ExtractionHandler                    │
         │    ├─ DataSourceFactory                 │
         │    ├─ SqlServerDataSource (Dapper)      │
-        │    └─ OracleDataSource (REF CURSOR)     │
+        │    ├─ OracleDataSource (REF CURSOR)     │
+        │    └─ DotNetDataSource (Code Generator) │
         ├─────────────────────────────────────────┤
         │ 2. TransformationHandler                │
         │    ├─ TransformationStepFactory (Auto-  │
@@ -212,7 +233,8 @@ For production with HTTPS:
         │ 5. UploadHandler                        │
         │    ├─ UploadProviderFactory             │
         │    ├─ FileSystemUploadProvider          │
-        │    └─ AzureBlobStorageProvider          │
+        │    ├─ AzureBlobStorageProvider          │
+        │    └─ AxwayUploadProvider (SFTP)        │
         └─────────────────────────────────────────┘
         
         Supporting Services:
@@ -229,7 +251,7 @@ PipelineContext (Job Metadata)
     │
     ├─► ExtractedData (DataTable)              ← set by ExtractionHandler
     ├─► ExtractedDataSets (Dict<id,DataTable>) ← set by ExtractionHandler (multi-source)
-    ├─► TransformedData (DataTable)            ← set by TransformationHandler
+    │       (TransformationHandler modifies ExtractedData in place)
     ├─► ParquetData (byte[])                   ← set by ParquetGenerationHandler
     ├─► CtlData (byte[])                       ← set by CtlGenerationHandler
     ├─► CtlFileName (string)                   ← set by CtlGenerationHandler
@@ -241,6 +263,8 @@ PipelineContext (Job Metadata)
 - **.NET 8 SDK** (or later)
 - **SQL Server** (for SQL Server data sources)
 - **Oracle Instant Client** (for Oracle data sources with REF CURSOR support)
+- **Docker** (optional — `docker-compose.yml` provides SQL Server 2022 and Oracle XE 21 for local development)
+- **Node.js 18+** (optional — for building the management UI)
 - **Windows 10/Server 2016+** or **Linux** (Ubuntu 20.04+, RHEL 8+, Debian 10+)
 - **Visual Studio 2022** or **VS Code** (optional, for development)
 
@@ -251,12 +275,16 @@ PipelineContext (Job Metadata)
 | .NET | 8.0 | Cross-platform runtime |
 | Dapper | 2.1.28 | Lightweight ORM |
 | Quartz.NET | 3.8.0 | Job scheduling |
+| Polly | 8.2.0 | Retry with exponential backoff |
 | Parquet.Net | 4.18.1 | Parquet file generation |
 | Serilog | 3.1.1 | Structured logging |
+| OpenTelemetry | 1.x | Distributed tracing (OTLP export) |
 | Swashbuckle | 6.5.0 | OpenAPI / Swagger UI |
 | Oracle.ManagedDataAccess.Core | 3.21.130 | Oracle connectivity |
 | Microsoft.Data.SqlClient | 5.1.5 | SQL Server connectivity |
 | Azure.Storage.Blobs | 12.19.1 | Azure Blob Storage |
+| React | 19.0.0 | Management UI |
+| Vite | 6.2.0 | UI build tooling |
 
 ## Quick Start
 
@@ -1025,11 +1053,12 @@ Each dataset is defined in a JSON file in the `Datasets/` directory:
   "cronExpression": "0 0 2 * * ?",           // Quartz cron expression
 
   "source": {
-    "type": "SqlServer",                      // SqlServer | Oracle
+    "type": "SqlServer",                      // SqlServer | Oracle | DotNet
     "connectionStringKey": "ConnectionName",  // Key from appsettings.json
-    "extractionType": "StoredProcedure",      // StoredProcedure | Package | Query
+    "extractionType": "StoredProcedure",      // StoredProcedure | Package | Query | CodeGenerator
     "procedureName": "dbo.sp_GetData",        // Stored procedure name (StoredProcedure/Package)
     "packageName": "PKG_DATA",                // Oracle package (if type=Package)
+    "providerName": "MyDataProvider",         // .NET code generator class name (if type=DotNet)
     "sqlFilePath": "GetData.sql",             // SQL file in SqlFiles folder (if type=Query)
     "parameters": {                           // Input parameters (supports runtime placeholders)
       "ParamName": "ParamValue",
@@ -1069,7 +1098,7 @@ Each dataset is defined in a JSON file in the `Datasets/` directory:
   },
 
   "upload": {
-    "provider": "FileSystem",                 // FileSystem | AzureBlob | AwsS3 | Axway
+    "provider": "FileSystem",                 // FileSystem | AzureBlob | Axway
     "fileSystemConfig": {
       "basePath": "",                         // Override global BasePath
       "relativePath": "data/{year}/{month}/"  // Supports placeholders
@@ -1434,7 +1463,9 @@ DataLakeIngestionService/
 │   │   ├── DataExtraction/
 │   │   │   ├── SqlServerDataSource.cs          # Dapper SQL Server
 │   │   │   ├── OracleDataSource.cs             # Oracle REF CURSOR
-│   │   │   └── OracleDynamicParameters.cs      # Custom parameters
+│   │   │   ├── OracleDynamicParameters.cs      # Custom parameters
+│   │   │   ├── DotNetDataSource.cs             # .NET code generator extraction
+│   │   │   └── DotNetDataProviderFactory.cs    # Auto-discovers IDotNetDataProvider implementations
 │   │   ├── Transformation/
 │   │   │   ├── TransformationStepFactory.cs    # Auto-discovery factory
 │   │   │   ├── TransformationEngine.cs         # Orchestrator
@@ -1450,7 +1481,8 @@ DataLakeIngestionService/
 │   │   ├── Upload/
 │   │   │   ├── Providers/
 │   │   │   │   ├── FileSystemUploadProvider.cs # Local/network upload
-│   │   │   │   └── AzureBlobStorageProvider.cs # Azure Blob upload
+│   │   │   │   ├── AzureBlobStorageProvider.cs # Azure Blob upload
+│   │   │   │   └── AxwayUploadProvider.cs      # Axway SFTP upload
 │   │   │   └── UploadProviderFactory.cs
 │   │   └── Vault/
 │   │       ├── EvaVaultService.cs              # EVA vault integration
@@ -1460,14 +1492,27 @@ DataLakeIngestionService/
 │       ├── Extensions/
 │       │   └── ServiceCollectionExtensions.cs  # DI registration
 │       ├── Jobs/
-│       │   └── DataIngestionJob.cs             # Quartz IJob
+│       │   └── DataIngestionJob.cs             # Quartz IJob (with Polly retry)
+│       ├── Models/
+│       │   └── RetryPolicySettings.cs          # Retry policy configuration POCO
 │       ├── Services/
-│       │   └── JobSchedulingService.cs         # Job scheduler
+│       │   ├── JobSchedulingService.cs         # Job scheduler (hosted service)
+│       │   ├── JobManagementService.cs         # Runtime job/config management
+│       │   └── ActivityEnricher.cs             # Serilog TraceId/SpanId enricher
+│       ├── FileCommandWatcher.cs               # File-based IPC for external control
+│       ├── Endpoints/
+│       │   └── JobEndpoints.cs                 # Minimal API endpoint mappings
 │       ├── Datasets/                           # Dataset configs
 │       │   └── SqlFiles/                       # Raw SQL query files
 │       │       └── GetDailyTrades.sql          # Example SQL file
 │       ├── Program.cs                          # Entry point
 │       └── appsettings.json                    # Configuration
+│
+│   └── UI/                                      # Management Dashboard
+│       ├── src/                                # React 19 + TypeScript source
+│       ├── package.json                        # npm dependencies
+│       ├── vite.config.ts                      # Vite build config
+│       └── tailwind.config.js                  # Tailwind CSS config
 │
 ├── tests/
 │   ├── Core.Tests/
@@ -1577,6 +1622,144 @@ public interface IVaultService
 ```
 
 Vault services can be used to retrieve connection strings and credentials securely instead of storing them in configuration files.
+
+### Retry Policy
+
+The `DataIngestionJob` wraps each pipeline execution in a **Polly 8 resilience pipeline** that retries the entire chain of responsibility on transient failures.
+
+**Behaviour:**
+
+1. The pipeline (extraction → transformation → Parquet → CTL → upload) is executed inside a `ResiliencePipeline<PipelineExecutionResult>`
+2. Both unhandled **exceptions** and **soft failures** (`PipelineExecutionResult.IsSuccess == false`) trigger a retry
+3. `OperationCanceledException` is **never** retried (graceful shutdown / cancellation)
+4. Each retry creates a **fresh `PipelineContext`**, so no stale state carries over
+5. After all retries are exhausted the job is marked as failed
+
+**Configuration** (`appsettings.json`):
+
+```json
+{
+  "RetryPolicy": {
+    "MaxRetries": 3,
+    "InitialDelaySeconds": 5,
+    "UseJitter": true
+  }
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `MaxRetries` | `int` | `3` | Maximum number of retry attempts |
+| `InitialDelaySeconds` | `double` | `5` | Initial delay before the first retry (doubles each attempt) |
+| `UseJitter` | `bool` | `true` | Add random jitter to prevent thundering herd |
+
+**Delay progression example (UseJitter = false):**
+
+| Attempt | Delay |
+|---------|-------|
+| 1 | 5 s |
+| 2 | 10 s |
+| 3 | 20 s |
+
+**OpenTelemetry tags** added per job execution:
+
+| Tag | Description |
+|-----|-------------|
+| `retry.max_attempts` | Configured maximum retries |
+| `retry.attempt` | Current attempt number (set on each retry) |
+
+### .NET Code Generator Data Source
+
+In addition to SQL Server and Oracle, the service supports **custom .NET code generators** for data extraction. This is useful when data doesn't come from a database (e.g., API calls, file parsing, computed datasets).
+
+**How it works:**
+
+1. Implement the `IDotNetDataProvider` interface with a `ProviderName` property and a `GetDataAsync` method that returns a `DataTable`
+2. At startup, `DotNetDataProviderFactory` auto-discovers all implementations via assembly scanning
+3. The dataset configuration references the provider by `providerName`
+
+**Dataset configuration example:**
+
+```json
+{
+  "datasetId": "computed-metrics",
+  "source": {
+    "type": "DotNet",
+    "extractionType": "CodeGenerator",
+    "providerName": "MetricsProvider"
+  }
+}
+```
+
+> **Note:** `connectionStringKey` is not required for DotNet sources since the data provider manages its own data access.
+
+### OpenTelemetry & Distributed Tracing
+
+The service instruments every pipeline execution with OpenTelemetry `Activity` spans, enabling end-to-end distributed tracing.
+
+**Components:**
+
+- `PipelineActivitySource` — creates spans for each pipeline stage (Extraction, Transformation, Parquet, CTL, Upload)
+- `ActivityEnricher` — Serilog enricher that injects `TraceId` and `SpanId` into every log event for log-trace correlation
+- OTLP exporter sends spans to a configurable collector endpoint
+
+**Configuration** (`appsettings.json`):
+
+```json
+{
+  "OpenTelemetry": {
+    "OtlpEndpoint": "http://localhost:4317"
+  }
+}
+```
+
+Point this at any OpenTelemetry-compatible backend (Jaeger, Zipkin, Grafana Tempo, Azure Monitor, etc.).
+
+### Axway SFTP Upload
+
+The `AxwayUploadProvider` uploads Parquet and CTL files over SFTP to an Axway gateway.
+
+**Configuration** (`appsettings.json`):
+
+```json
+{
+  "Axway": {
+    "Host": "sftp.example.com",
+    "Port": 22,
+    "Username": "svc_datalake",
+    "PrivateKeyPath": "/path/to/key",
+    "PrivateKeyPassphrase": "",
+    "BasePath": "/incoming/datalake",
+    "ConnectionTimeoutSeconds": 30,
+    "MaxRetries": 3
+  }
+}
+```
+
+| Property | Required | Description |
+|----------|----------|-------------|
+| `Host` | Yes | SFTP server hostname |
+| `Port` | No | SSH port (default `22`) |
+| `Username` | Yes | Authentication username |
+| `PrivateKeyPath` | Yes | Path to SSH private key file |
+| `PrivateKeyPassphrase` | No | Passphrase for the private key |
+| `BasePath` | No | Remote base directory for uploads (default `/`) |
+| `ConnectionTimeoutSeconds` | No | Connection timeout (default `30`) |
+| `MaxRetries` | No | Upload retry count (default `3`) |
+
+Use `"provider": "Axway"` in the dataset upload configuration to route files through this provider.
+
+### FileCommandWatcher (File-Based IPC)
+
+`FileCommandWatcher` provides an inter-process communication channel via the file system. External processes can query or control the scheduler without requiring HTTP access.
+
+**How it works:**
+
+1. A configurable `CommandDirectory` is polled every 500 ms for `*.cmd` files
+2. Each `.cmd` file contains a JSON `CommandRequest` (e.g., `{ "command": "jobs" }`)
+3. The watcher executes the command, writes the result to a `.result` file, and deletes the original `.cmd` file
+
+This is useful for environments where the REST API is not reachable (e.g., locked-down servers, batch scripts).
 
 ### Data Extraction (Dapper)
 
@@ -2116,12 +2299,18 @@ sudo journalctl -u datalake-ingestion -f
 
 ## Monitoring & Logs
 
+**Structured Logs:**
+
 **Windows:**
 - `[WorkingDirectory]/logs/datalake-YYYYMMDD.log`
 
 **Linux:**
 - `sudo journalctl -u datalake-ingestion`
 - `/opt/datalake-ingestion/logs/datalake-YYYYMMDD.log`
+
+**Distributed Tracing:**
+
+Configure the `OpenTelemetry.OtlpEndpoint` in `appsettings.json` to point at your collector. Spans include per-stage timing (Extraction, Transformation, Parquet, CTL, Upload) and retry metadata (`retry.max_attempts`, `retry.attempt`). Every log event is enriched with `TraceId` and `SpanId` for correlation.
 
 **Sample Log:**
 ```
@@ -2246,14 +2435,19 @@ public class ColumnMappingStep : ITransformationStep
 
 ## Roadmap
 
+- [x] Axway secure file transfer
+- [x] Retry with exponential backoff (Polly)
+- [x] OpenTelemetry distributed tracing
+- [x] Management UI (React 19)
+- [x] .NET code generator data sources
+- [x] Docker Compose for local dev databases
 - [ ] AWS S3 upload provider
-- [ ] Axway secure file transfer
 - [ ] Additional transformation steps
 - [ ] Persistent Quartz store (SQL Server)
 - [ ] Email/webhook notifications
 - [ ] Prometheus metrics
 - [ ] Unit and integration tests
-- [ ] Docker containerization
+- [ ] Docker containerization (service image)
 - [ ] Kubernetes manifests
 - [ ] Incremental extraction (CDC)
 

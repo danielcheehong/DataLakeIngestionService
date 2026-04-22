@@ -4,6 +4,8 @@ using DataLakeIngestionService.Core.Interfaces.Vault;
 using DataLakeIngestionService.Core.Security;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Polly;
+using Polly.Retry;
 
 namespace DataLakeIngestionService.Infrastructure.Vault;
 
@@ -59,44 +61,74 @@ public class SecuritasVaultService : IVaultService
 
     public async Task<SecretValue> GetSecretAsync(string secretPath, CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Retrieving secret from Securitas vault: {Path}", secretPath);
+
+        var pipeline = new ResiliencePipelineBuilder<SecretValue>()
+            .AddRetry(new RetryStrategyOptions<SecretValue>
+            {
+                MaxRetryAttempts = 3,
+                BackoffType = DelayBackoffType.Exponential,
+                Delay = TimeSpan.FromSeconds(1),
+                UseJitter = true,
+                ShouldHandle = new PredicateBuilder<SecretValue>()
+                    .Handle<Exception>(ex =>
+                        ex is not OperationCanceledException &&
+                        !(ex is HttpRequestException httpEx &&
+                          (httpEx.Message.Contains("SSL") || httpEx.Message.Contains("certificate")))),
+                OnRetry = args =>
+                {
+                    _logger.LogWarning(
+                        "Retry attempt {AttemptNumber}/{MaxRetries} retrieving secret from Securitas vault. " +
+                        "Path: {Path}. Delay: {RetryDelay}. Reason: {Reason}",
+                        args.AttemptNumber + 1,
+                        3,
+                        secretPath,
+                        args.RetryDelay,
+                        args.Outcome.Exception?.Message);
+                    return ValueTask.CompletedTask;
+                }
+            })
+            .Build();
+
         try
         {
-            _logger.LogInformation("Retrieving secret from Securitas vault: {Path}", secretPath);
-
-            var requestUrl = $"{_baseUrl}/v1/secret/data/{secretPath}";
-
-            var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
-
-            // Add bearer token if configured
-            if (_useBearerToken && !string.IsNullOrWhiteSpace(_authToken))
+            return await pipeline.ExecuteAsync(async ct =>
             {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _authToken);
-            }
+                var requestUrl = $"{_baseUrl}/v1/secret/data/{secretPath}";
+                var request = new HttpRequestMessage(HttpMethod.Get, requestUrl);
 
-            // Note: Client certificate is automatically attached by HttpClientHandler
-            // configured in DI registration
+                // Add bearer token if configured
+                if (_useBearerToken && !string.IsNullOrWhiteSpace(_authToken))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _authToken);
+                }
 
-            var response = await _httpClient.SendAsync(request, cancellationToken);
-            response.EnsureSuccessStatusCode();
+                // Note: Client certificate is automatically attached by HttpClientHandler
+                // configured in DI registration
 
-            var content = await response.Content.ReadAsStringAsync(cancellationToken);
-            var secretData = JsonDocument.Parse(content);
+                var response = await _httpClient.SendAsync(request, ct);
+                response.EnsureSuccessStatusCode();
 
-            // Parse Securitas vault response format
-            var secret = secretData.RootElement
-                .GetProperty("data")
-                .GetProperty("data")
-                .GetProperty("value")
-                .GetString();
+                var content = await response.Content.ReadAsStringAsync(ct);
+                var secretData = JsonDocument.Parse(content);
 
-            if (string.IsNullOrWhiteSpace(secret))
-            {
-                throw new InvalidOperationException($"Secret value is empty for path: {secretPath}");
-            }
+                // Parse Securitas vault response format
+                var secret = secretData.RootElement
+                    .GetProperty("data")
+                    .GetProperty("data")
+                    .GetProperty("value")
+                    .GetString();
 
-            _logger.LogInformation("Successfully retrieved secret from Securitas vault");
-            // Wrap in SecretValue so the caller can zero the buffer via Dispose().
-            return new SecretValue(secret);
+                if (string.IsNullOrWhiteSpace(secret))
+                {
+                    throw new InvalidOperationException($"Secret value is empty for path: {secretPath}");
+                }
+
+                _logger.LogInformation("Successfully retrieved secret from Securitas vault");
+                // Wrap in SecretValue so the caller can zero the buffer via Dispose().
+                return new SecretValue(secret);
+
+            }, cancellationToken);
         }
         catch (HttpRequestException ex) when (ex.Message.Contains("SSL") || ex.Message.Contains("certificate"))
         {
