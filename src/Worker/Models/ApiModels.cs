@@ -104,3 +104,8 @@ public class DatasetConfigUpdateResultDto
     /// <summary>The full updated dataset configuration. Null on failure.</summary>
     public DatasetConfiguration? UpdatedConfig { get; set; }
 }
+
+/// <summary>
+/// Request body for PUT /api/parameter-overrides/{paramName}.
+/// </summary>
+public record ParameterOverrideRequest(string Value);

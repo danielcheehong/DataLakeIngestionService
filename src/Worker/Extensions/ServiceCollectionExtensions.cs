@@ -58,6 +58,7 @@ public static class ServiceCollectionExtensions
 
         // Register Infrastructure Services
         services.AddScoped<IDataSourceFactory, DataSourceFactory>();
+        services.AddSingleton<IParameterOverrideService, ParameterOverrideService>();
         services.AddSingleton<IParameterResolverService, ParameterResolverService>();
 
         // Register DotNet Data Provider Factory (auto-discovers providers via assembly scanning)

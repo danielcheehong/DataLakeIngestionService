@@ -1,3 +1,4 @@
+using DataLakeIngestionService.Core.Interfaces.DataExtraction;
 using DataLakeIngestionService.Core.Models;
 using DataLakeIngestionService.Worker.Models;
 using DataLakeIngestionService.Worker.Services;
@@ -138,5 +139,61 @@ public static class JobEndpoints
             "named parameter values in source/sources[*].parameters, and upload provider. " +
             "Returns the full updated configuration. Use POST /api/jobs/{datasetId}/trigger to run the job afterwards.")
         .WithTags("Dataset Config");
+
+        // --- Parameter Overrides (test environment) ---
+        var overrideGroup = app.MapGroup("/api/parameter-overrides")
+            .WithTags("Parameter Overrides");
+
+        // GET /api/parameter-overrides - list all active overrides
+        overrideGroup.MapGet("/", (IParameterOverrideService service) =>
+            Results.Ok(service.GetAllOverrides()))
+        .WithName("GetAllParameterOverrides")
+        .WithSummary("Get all parameter overrides")
+        .WithDescription("Returns all active in-memory parameter overrides. Values take precedence over the dataset JSON configuration.");
+
+        // GET /api/parameter-overrides/{paramName} - get a single override
+        overrideGroup.MapGet("/{paramName}", (string paramName, IParameterOverrideService service) =>
+        {
+            if (service.TryGetOverride(paramName, out var value))
+                return Results.Ok(new { paramName, value });
+
+            return Results.NotFound(new { Error = $"No override found for parameter '{paramName}'." });
+        })
+        .WithName("GetParameterOverride")
+        .WithSummary("Get a single parameter override")
+        .WithDescription("Returns the active in-memory override value for the specified parameter name. Lookup is case-insensitive.");
+
+        // PUT /api/parameter-overrides/{paramName} - set or replace an override
+        overrideGroup.MapPut("/{paramName}", (string paramName, [FromBody] ParameterOverrideRequest request, IParameterOverrideService service) =>
+        {
+            if (string.IsNullOrWhiteSpace(request.Value))
+                return Results.BadRequest(new { Error = "Value must not be empty." });
+
+            service.SetOverride(paramName, request.Value);
+            return Results.Ok(new { paramName, value = request.Value });
+        })
+        .WithName("SetParameterOverride")
+        .WithSummary("Set a parameter override")
+        .WithDescription("Stores an in-memory override for the specified parameter name. Applies globally to all datasets on the next execution.");
+
+        // DELETE /api/parameter-overrides/{paramName} - remove a single override
+        overrideGroup.MapDelete("/{paramName}", (string paramName, IParameterOverrideService service) =>
+        {
+            service.RemoveOverride(paramName);
+            return Results.NoContent();
+        })
+        .WithName("RemoveParameterOverride")
+        .WithSummary("Remove a parameter override")
+        .WithDescription("Removes the in-memory override for the specified parameter name. The dataset JSON configuration value will be used on next execution.");
+
+        // DELETE /api/parameter-overrides - clear all overrides
+        overrideGroup.MapDelete("/", (IParameterOverrideService service) =>
+        {
+            service.ClearAllOverrides();
+            return Results.NoContent();
+        })
+        .WithName("ClearAllParameterOverrides")
+        .WithSummary("Clear all parameter overrides")
+        .WithDescription("Removes all active in-memory parameter overrides.");
     }
 }

@@ -28,6 +28,7 @@ namespace DataLakeIngestionService.Infrastructure.DataExtraction;
 public partial class ParameterResolverService : IParameterResolverService
 {
     private readonly ILogger<ParameterResolverService> _logger;
+    private readonly IParameterOverrideService _parameterOverrideService;
 
     // Pattern matches ${expression} where expression can contain alphanumeric, underscore, colon, plus, minus
     [GeneratedRegex(@"\$\{([^}]+)\}", RegexOptions.Compiled)]
@@ -46,9 +47,12 @@ public partial class ParameterResolverService : IParameterResolverService
     [GeneratedRegex(@"^now([+-])(\d+)([hm])$", RegexOptions.Compiled)]
     private static partial Regex NowUnitArithmeticPattern();
 
-    public ParameterResolverService(ILogger<ParameterResolverService> logger)
+    public ParameterResolverService(
+        ILogger<ParameterResolverService> logger,
+        IParameterOverrideService parameterOverrideService)
     {
         _logger = logger;
+        _parameterOverrideService = parameterOverrideService;
     }
 
     public Task<Dictionary<string, object>> ResolveAsync(
@@ -83,6 +87,14 @@ public partial class ParameterResolverService : IParameterResolverService
 
     private object ResolveValue(string paramName, object? value, ParameterResolutionContext context)
     {
+        // Check in-memory overrides first. When an override exists it takes full precedence,
+        // bypassing placeholder resolution (e.g. ${today-1}) for that parameter.
+        if (_parameterOverrideService.TryGetOverride(paramName, out var overrideValue) && overrideValue != null)
+        {
+            _logger.LogDebug("Parameter '{Name}' resolved from in-memory override: '{Value}'", paramName, overrideValue);
+            return overrideValue;
+        }
+
         // Handle null - could default based on parameter name conventions
         if (value == null)
         {
