@@ -67,7 +67,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITransformationEngine, TransformationEngine>();
         services.AddScoped<IParquetWriter, ParquetWriterService>();
         services.AddScoped<ICtlWriter, CtlWriterService>();
-        services.AddScoped<IUploadProviderFactory, UploadProviderFactory>();
+        var testMode = configuration.GetValue<bool>("TestMode", false);
+        services.AddScoped<IUploadProviderFactory>(sp => new UploadProviderFactory(
+            sp.GetRequiredService<ILogger<FileSystemUploadProvider>>(),
+            sp.GetRequiredService<ILogger<AzureBlobStorageProvider>>(),
+            sp.GetRequiredService<ILogger<AxwayUploadProvider>>(),
+            sp.GetRequiredService<FileSystemOptions>(),
+            sp.GetRequiredService<AzureBlobOptions>(),
+            sp.GetRequiredService<AxwayOptions>(),
+            testMode));
 
         // Register ReferenceDataProvider with IServiceScopeFactory
         services.AddSingleton<IReferenceDataProvider, ReferenceDataProvider>();
@@ -200,6 +208,11 @@ public static class ServiceCollectionExtensions
 
         // Register OpenTelemetry tracing
         services.AddOpenTelemetry()
+            .ConfigureResource(r => r.AddAttributes(new Dictionary<string, object>
+            {
+                ["cmdbReference"] = configuration["OpenTelemetry:CmdbReference"] ?? string.Empty,
+                ["opEnvironment"] = configuration["OpenTelemetry:OpEnvironment"] ?? string.Empty,
+            }))
             .WithTracing(tracing => tracing
                 .AddSource(PipelineActivitySource.Name)
                 .AddConsoleExporter()
